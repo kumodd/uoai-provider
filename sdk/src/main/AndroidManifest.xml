@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <queries>
+        <package android:name="com.uoai.provider" />
+    </queries>
+    <application android:networkSecurityConfig="@xml/uoai_network_security_config" />
+</manifest>

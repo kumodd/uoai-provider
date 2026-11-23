@@ -1,0 +1,14 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.task
+*.litertlm
+*.bin
+signing/*.jks
+signing/*.keystore
+signing/*.properties
+docs/KEYSTORES.md
+uoai-chat-app/KEYSTORES.md
+playstore-assets/
+.DS_Store
