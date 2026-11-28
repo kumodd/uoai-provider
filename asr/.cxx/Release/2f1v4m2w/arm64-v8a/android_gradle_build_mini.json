@@ -1,0 +1,73 @@
+{
+  "buildFiles": [
+    "/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/CMakeLists.txt",
+    "/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/CMakeLists.txt",
+    "/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/cmake/build-info.cmake",
+    "/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/cmake/parakeet-config.cmake.in",
+    "/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/cmake/whisper-config.cmake.in",
+    "/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/ggml/CMakeLists.txt",
+    "/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/ggml/cmake/common.cmake",
+    "/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/ggml/cmake/ggml-config.cmake.in",
+    "/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/ggml/src/CMakeLists.txt",
+    "/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/ggml/src/ggml-cpu/CMakeLists.txt",
+    "/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/src/CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "/Users/kumodyadav/Library/Android/sdk/cmake/3.22.1/bin/ninja",
+      "-C",
+      "/Users/kumodyadav/Desktop/UOAIP/asr/.cxx/Release/2f1v4m2w/arm64-v8a",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "/Users/kumodyadav/Library/Android/sdk/cmake/3.22.1/bin/ninja",
+    "-C",
+    "/Users/kumodyadav/Desktop/UOAIP/asr/.cxx/Release/2f1v4m2w/arm64-v8a",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "cactus_jni::@6890427a1f51a3e7e1df": {
+      "artifactName": "cactus_jni",
+      "abi": "arm64-v8a",
+      "output": "/Users/kumodyadav/Desktop/UOAIP/asr/build/intermediates/cxx/Release/2f1v4m2w/obj/arm64-v8a/libcactus_jni.so",
+      "runtimeFiles": []
+    },
+    "ggml-base::@74253485f3a7ec30fb13": {
+      "artifactName": "ggml-base",
+      "abi": "arm64-v8a",
+      "output": "/Users/kumodyadav/Desktop/UOAIP/asr/.cxx/Release/2f1v4m2w/arm64-v8a/whisper.cpp/ggml/src/libggml-base.a",
+      "runtimeFiles": []
+    },
+    "whisper_jni::@6890427a1f51a3e7e1df": {
+      "artifactName": "whisper_jni",
+      "abi": "arm64-v8a",
+      "output": "/Users/kumodyadav/Desktop/UOAIP/asr/build/intermediates/cxx/Release/2f1v4m2w/obj/arm64-v8a/libwhisper_jni.so",
+      "runtimeFiles": []
+    },
+    "ggml-cpu::@74253485f3a7ec30fb13": {
+      "artifactName": "ggml-cpu",
+      "abi": "arm64-v8a",
+      "output": "/Users/kumodyadav/Desktop/UOAIP/asr/.cxx/Release/2f1v4m2w/arm64-v8a/whisper.cpp/ggml/src/libggml-cpu.a",
+      "runtimeFiles": []
+    },
+    "parakeet::@a8a66f5e841e94d32cb3": {
+      "artifactName": "parakeet",
+      "abi": "arm64-v8a",
+      "output": "/Users/kumodyadav/Desktop/UOAIP/asr/.cxx/Release/2f1v4m2w/arm64-v8a/whisper.cpp/src/libparakeet.a",
+      "runtimeFiles": []
+    },
+    "ggml::@74253485f3a7ec30fb13": {
+      "artifactName": "ggml",
+      "abi": "arm64-v8a",
+      "output": "/Users/kumodyadav/Desktop/UOAIP/asr/.cxx/Release/2f1v4m2w/arm64-v8a/whisper.cpp/ggml/src/libggml.a",
+      "runtimeFiles": []
+    },
+    "whisper::@a8a66f5e841e94d32cb3": {
+      "artifactName": "whisper",
+      "abi": "arm64-v8a",
+      "output": "/Users/kumodyadav/Desktop/UOAIP/asr/.cxx/Release/2f1v4m2w/arm64-v8a/whisper.cpp/src/libwhisper.a",
+      "runtimeFiles": []
+    }
+  }
+}

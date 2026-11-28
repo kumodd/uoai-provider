@@ -217,6 +217,8 @@ private fun ClientCard(
                 PermissionToggleRow("Chat Completions", p.chat) { vm.permissions(c, p.copy(chat = it)) }
                 PermissionToggleRow("Streaming (SSE)", p.streaming) { vm.permissions(c, p.copy(streaming = it)) }
                 PermissionToggleRow("Tool Calling", p.toolCalling) { vm.permissions(c, p.copy(toolCalling = it)) }
+                PermissionToggleRow("Speech Recognition (ASR)", p.speechToText) { vm.permissions(c, p.copy(speechToText = it)) }
+                PermissionToggleRow("ASR Model Load / Unload", p.asrModelControl) { vm.permissions(c, p.copy(asrModelControl = it)) }
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Text("Max Output Token Cap (${formatTokenShort(p.maxTokens)})", style = MaterialTheme.typography.labelLarge)

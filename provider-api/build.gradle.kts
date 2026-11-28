@@ -23,6 +23,7 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     implementation(project(":core"))
     api(project(":inference"))
+    api(project(":asr"))
     api(project(":client-management"))
     api(project(":plugins"))
     implementation(libs.ktor.server.core)
@@ -33,4 +34,5 @@ dependencies {
     implementation(libs.ktor.serialization.json)
     testImplementation(libs.ktor.server.test.host)
     testImplementation(project(":inference"))
+    testImplementation(project(":asr"))
 }

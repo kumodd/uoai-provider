@@ -24,5 +24,8 @@ class RoomRequestRecorder(private val dao: InferenceRequestDao, scope: Coroutine
             }
         }
     }
-    override fun onUpdate(record: RequestRecord, request: InferenceRequest) { updates.trySend(record to request) }
+    override fun onUpdate(record: RequestRecord, request: InferenceRequest) {
+        // Never retain multimodal audio byte payloads inside the async persistence queue.
+        updates.trySend(record to if (request.audioWavBytes != null) request.copy(audioWavBytes = null) else request)
+    }
 }

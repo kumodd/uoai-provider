@@ -21,4 +21,5 @@ data class ModelStatus(
     val loadProgress: Float? = null,
     val errorMessage: String? = null,
     val loadedConfig: RuntimeLoadConfig? = null,
+    val supportsAudioInput: Boolean = false,
 )

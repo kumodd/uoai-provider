@@ -106,6 +106,7 @@ data class CapabilitiesResponse(
     @SerialName("provider_tools") val providerTools: List<String> = emptyList(),
     @SerialName("context_window_tokens") val contextWindowTokens: Int = 4096,
     @SerialName("default_max_tokens") val defaultMaxTokens: Int = 2048,
+    val asr: AsrCapabilitiesDto? = null,
 )
 
 @Serializable data class CancelRequest(@SerialName("request_id") val requestId: String? = null)

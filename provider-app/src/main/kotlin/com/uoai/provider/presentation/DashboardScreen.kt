@@ -17,6 +17,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.uoai.asr.AsrModelState
 import com.uoai.inference.ModelState
 import com.uoai.inference.RequestStatus
 import com.uoai.provider.ui.components.*
@@ -27,11 +28,15 @@ import java.util.Date
 @Composable
 fun OverviewTab(
     state: DashboardUiState,
+    asrState: SpeechSettingsUiState = SpeechSettingsUiState(),
     onStartServer: () -> Unit,
     onStopServer: () -> Unit,
     onLoadModel: () -> Unit,
     onUnloadModel: () -> Unit,
+    onLoadAsrModel: () -> Unit = {},
+    onUnloadAsrModel: () -> Unit = {},
     onOpenModelTab: () -> Unit,
+    onOpenSpeechTab: () -> Unit = {},
     onOpenClientsTab: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -234,6 +239,55 @@ fun OverviewTab(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(onClick = onOpenModelTab) {
                     Text("Configure Model & 32K Limits")
+                    Spacer(Modifier.width(4.dp))
+                    Icon(Icons.AutoMirrored.Rounded.ArrowForward, null, Modifier.size(16.dp))
+                }
+            }
+        }
+
+        // Shared Speech Recognition (ASR) Card
+        val asrStatus = asrState.status
+        val asrBusy = asrStatus.state in setOf(
+            AsrModelState.DOWNLOADING, AsrModelState.VERIFYING, AsrModelState.LOADING, AsrModelState.UNLOADING, AsrModelState.TRANSCRIBING,
+        )
+        val asrBadgeColor = when (asrStatus.state) {
+            AsrModelState.READY, AsrModelState.TRANSCRIBING -> sc.ready
+            AsrModelState.ERROR -> sc.error
+            AsrModelState.DOWNLOADING, AsrModelState.VERIFYING, AsrModelState.LOADING, AsrModelState.UNLOADING -> sc.warning
+            AsrModelState.INSTALLED, AsrModelState.NOT_INSTALLED -> sc.neutral
+        }
+        SectionCard(
+            title = "Speech Recognition · ${asrStatus.activePreset.displayName}",
+            icon = Icons.Rounded.GraphicEq,
+            subtitle = "${asrStatus.activePreset.profile.displayName} (${asrStatus.activePreset.profile.badgeLabel}) · Lang: ${asrState.settings.defaultLanguage} · Queue: ${asrState.queue.queued}",
+            trailing = { StatusPill(asrStatus.state.name, asrBadgeColor) },
+        ) {
+            asrStatus.downloadProgress?.let { p ->
+                LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth())
+            }
+            asrStatus.errorMessage?.let { err ->
+                Surface(color = sc.errorContainer, shape = MaterialTheme.shapes.small) {
+                    Text(err, style = MaterialTheme.typography.bodySmall, color = sc.error, modifier = Modifier.padding(10.dp))
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (asrStatus.isLoaded) {
+                    OutlinedButton(onClick = onUnloadAsrModel, enabled = asrStatus.state == AsrModelState.READY) {
+                        Text("Unload ASR")
+                    }
+                } else if (asrStatus.isSelectedInstalled) {
+                    FilledTonalButton(onClick = onLoadAsrModel, enabled = !asrBusy) {
+                        Text(if (asrStatus.state == AsrModelState.LOADING) "Loading…" else "Load ASR")
+                    }
+                } else {
+                    Spacer(Modifier.width(1.dp))
+                }
+                TextButton(onClick = onOpenSpeechTab) {
+                    Text("Configure Speech Recognition")
                     Spacer(Modifier.width(4.dp))
                     Icon(Icons.AutoMirrored.Rounded.ArrowForward, null, Modifier.size(16.dp))
                 }

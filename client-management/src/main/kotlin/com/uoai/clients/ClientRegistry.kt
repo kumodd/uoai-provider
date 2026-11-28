@@ -13,6 +13,10 @@ data class ClientPermissions(
     val maxTokens: Int = 4096,
     /** Scheduler priority; higher runs first. */
     val priority: Int = 0,
+    /** Allows calling /v1/audio/transcriptions and /v1/audio/stream. */
+    val speechToText: Boolean = true,
+    /** Privileged permission allowing explicit /v1/audio/models/load and /unload. */
+    val asrModelControl: Boolean = false,
 ) {
     companion object {
         val TOKEN_PRESETS = listOf(512, 1024, 2048, 4096, 8192, 16384, 32768)

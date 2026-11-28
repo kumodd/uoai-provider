@@ -22,20 +22,21 @@ class ModelManagerTest {
 
     private fun bigStream() = ByteArrayInputStream(ByteArray(11 * 1024 * 1024))
     private fun req(id: String = "r1") =
-        InferenceRequest(id, "c", "gemma-3", listOf(ChatMessage("user", "hello world")), GenerationParams())
+        InferenceRequest(id, "c", "gemma-4-e2b", listOf(ChatMessage("user", "hello world")), GenerationParams())
 
     @Test fun rejectsTinyFile() = runTest {
         val (m, _, _) = fixture()
-        m.importModel("x.task", ByteArrayInputStream(ByteArray(10)))
+        m.importModel("x.litertlm", ByteArrayInputStream(ByteArray(10)))
         assertEquals(ModelState.ERROR, m.status.value.state)
         assertFalse(m.isInstalled)
     }
 
     @Test fun importLoadUnloadLifecycle() = runTest {
         val (m, rt, _) = fixture()
-        m.importModel("gemma3-1b-it-int4.task", bigStream())
+        m.importModel("gemma-4-E2B-it-int4.litertlm", bigStream())
         assertTrue(m.isInstalled)
-        assertEquals("int4", m.installedInfo()?.quantization)
+        assertEquals("e2b", m.installedInfo()?.quantization?.lowercase())
+        assertEquals("gemma-4-e2b", m.installedInfo()?.id)
         m.load(); assertEquals(ModelState.READY, m.status.value.state)
         m.load(); assertTrue(rt.isLoaded) // second load is a no-op
         m.unload(); assertFalse(rt.isLoaded)
@@ -54,7 +55,7 @@ class ModelManagerTest {
 
     @Test fun engineGenerates() = runBlocking {
         val (m, _, e) = fixture()
-        m.importModel("a.task", bigStream()); m.load()
+        m.importModel("gemma-4-E2B-it.litertlm", bigStream()); m.load()
         assertTrue(e.generate(req()).contains("hello world"))
     }
 }

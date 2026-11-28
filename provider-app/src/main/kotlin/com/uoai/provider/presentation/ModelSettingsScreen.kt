@@ -16,6 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.uoai.inference.*
 import com.uoai.provider.ui.components.*
@@ -23,11 +24,18 @@ import com.uoai.provider.ui.theme.ProviderThemeDefaults
 import java.util.Locale
 import kotlin.math.roundToInt
 
-private enum class ModelSourceFilter(val label: String) {
-    GEMMA_4("Gemma 4 (${ModelCatalog.byFamily(ModelFamily.GEMMA_4).size})"),
-    GEMMA_3("Gemma 3 (${ModelCatalog.byFamily(ModelFamily.GEMMA_3).size})"),
+private enum class ModelCatalogFilter(val label: String) {
+    RECOMMENDED("Recommended"),
+    GEMMA_4("All Gemma 4"),
     CUSTOM("Custom"),
 }
+
+private val RECOMMENDED_PRESET_IDS = setOf(
+    "gemma-4-e2b-std",
+    "gemma-4-e2b-gpu",
+    "gemma-4-e4b-std",
+    "gemma-4-e4b-gpu",
+)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -59,8 +67,9 @@ fun ModelSettingsTab(
 
     var showCustomTokenDialog by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
-    var installExpanded by remember(state.modelInstalled) { mutableStateOf(!state.modelInstalled) }
-    var sourceFilter by remember { mutableStateOf(ModelSourceFilter.GEMMA_4) }
+    var catalogExpanded by remember(state.modelInstalled) { mutableStateOf(!state.modelInstalled) }
+    var advancedExpanded by remember { mutableStateOf(false) }
+    var filter by remember { mutableStateOf(ModelCatalogFilter.RECOMMENDED) }
     var hfTokenInput by remember { mutableStateOf("") }
     var tokenVisible by remember { mutableStateOf(false) }
     var showOptionalToken by remember { mutableStateOf(false) }
@@ -69,313 +78,223 @@ fun ModelSettingsTab(
 
     val requiresToken = ModelCatalog.requiresHfToken(cfg.huggingFaceRepo, cfg.huggingFaceFile)
     val selectedPreset = ModelCatalog.findPreset(cfg.huggingFaceRepo, cfg.huggingFaceFile)
+    val activeCtx = state.model.loadedConfig?.contextWindowTokens ?: cfg.contextWindowTokens
+    val activeBackend = state.model.loadedConfig?.preferredBackend ?: cfg.preferredBackend
 
     Column(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // 1. Model Lifecycle Card
+        // 1. Clean Hero Card: Active LLM Status & Primary Action
         val badgeColor = when {
             s == ModelState.READY || s == ModelState.GENERATING -> sc.ready
             s == ModelState.ERROR -> sc.error
             busy -> sc.warning
             else -> sc.neutral
         }
-        val stateLabel = if (s == ModelState.NOT_INSTALLED && state.modelInstalled) "INSTALLED" else s.name
-        SectionCard(
-            title = "Runtime & Model Instance",
-            icon = Icons.Rounded.SmartToy,
-            subtitle = state.model.model?.let {
-                "${it.name} · ${it.version ?: it.format?.uppercase() ?: "BUNDLE"} · ${formatFileSize(it.fileSizeBytes)}"
-            } ?: "No local model installed",
-            trailing = { StatusPill(stateLabel, badgeColor) },
+        val stateLabel = if (s == ModelState.NOT_INSTALLED && state.modelInstalled) "READY TO LOAD" else s.name
+
+        OutlinedCard(
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.medium,
+            colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         ) {
-            state.model.loadedConfig?.let { lc ->
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AssistChip(
-                        onClick = {},
-                        label = { Text("Active Context: ${formatTokenShort(lc.contextWindowTokens)}") },
-                        leadingIcon = { Icon(Icons.Rounded.Memory, null, Modifier.size(16.dp)) },
-                    )
-                    AssistChip(
-                        onClick = {},
-                        label = { Text("Backend: ${lc.preferredBackend}") },
-                    )
-                }
-            }
-
-            state.model.loadProgress?.let { p ->
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth())
-                    Text("${(p * 100).toInt()}%", style = MaterialTheme.typography.bodySmall)
-                }
-            } ?: if (busy) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            } else Unit
-
-            state.model.errorMessage?.let { err ->
-                Surface(color = sc.errorContainer, shape = MaterialTheme.shapes.small) {
-                    Text(err, color = sc.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(10.dp))
-                }
-            }
-
-            if (state.requiresReload) {
-                Surface(color = sc.warningContainer, shape = MaterialTheme.shapes.small) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(10.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "Context/backend changed. Reload model to apply (${formatTokenShort(cfg.contextWindowTokens)}).",
-                            color = sc.warning,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Button(onClick = onReload, enabled = !busy) { Text("Apply & Reload") }
-                    }
-                }
-            }
-
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (s == ModelState.READY || s == ModelState.GENERATING) {
-                    Button(
-                        onClick = onReload,
-                        enabled = !busy,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Icon(Icons.Rounded.Refresh, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Reload")
-                    }
-                    OutlinedButton(
-                        onClick = onUnload,
-                        enabled = s == ModelState.READY,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("Unload")
-                    }
-                } else {
-                    Button(
-                        onClick = onLoad,
-                        enabled = !busy && state.modelInstalled,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Icon(Icons.Rounded.PlayArrow, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(if (s == ModelState.LOADING) "Loading…" else "Load (${formatTokenShort(cfg.contextWindowTokens)})")
-                    }
-                }
-                if (state.modelInstalled) {
-                    IconButton(onClick = { showDeleteConfirm = true }, enabled = !busy) {
-                        Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete model", tint = MaterialTheme.colorScheme.error)
-                    }
-                }
-            }
-        }
-
-        // 2. Context Window & Max Output Tokens (up to 32K)
-        SectionCard(
-            title = "Context Window & Token Limits",
-            icon = Icons.Rounded.Tune,
-            subtitle = "Configure prompt + completion window up to 32K (32,768 tokens)",
-            trailing = {
-                TextButton(onClick = { showCustomTokenDialog = true }) { Text("Exact") }
-            },
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Context Window (KV Cache)", style = MaterialTheme.typography.titleSmall)
-                StatusPill(formatTokenFull(cfg.contextWindowTokens), MaterialTheme.colorScheme.primary)
-            }
-
-            TokenPresetRow(
-                selected = cfg.contextWindowTokens,
-                presets = InferenceSettings.CONTEXT_PRESETS,
-                onSelect = onUpdateContextWindow,
-            )
-
-            Slider(
-                value = cfg.contextWindowTokens.toFloat(),
-                onValueChange = { raw ->
-                    val snapped = ((raw / 512f).roundToInt() * 512)
-                        .coerceIn(InferenceSettings.MIN_CONTEXT_TOKENS, InferenceSettings.MAX_TOKENS_32K)
-                    onUpdateContextWindow(snapped)
-                },
-                valueRange = InferenceSettings.MIN_CONTEXT_TOKENS.toFloat()..InferenceSettings.MAX_TOKENS_32K.toFloat(),
-            )
-
-            if (cfg.contextWindowTokens > 4096) {
-                Surface(color = sc.warningContainer, shape = MaterialTheme.shapes.small) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.Top,
-                    ) {
-                        Icon(Icons.Rounded.Info, null, tint = sc.warning, modifier = Modifier.size(18.dp))
-                        Text(
-                            "High context (${formatTokenShort(cfg.contextWindowTokens)}) needs extra RAM (device currently has ${state.memory.deviceAvailMb} MB free). Gemma 4 supports up to 32K natively; some MediaPipe .task bundles cap KV cache at 2K–4K.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = sc.warning,
-                        )
-                    }
-                }
-            }
-
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Max Output Tokens (Default)", style = MaterialTheme.typography.titleSmall)
-                StatusPill(formatTokenFull(cfg.maxOutputTokens), MaterialTheme.colorScheme.secondary)
-            }
-
-            TokenPresetRow(
-                selected = cfg.maxOutputTokens,
-                presets = InferenceSettings.OUTPUT_PRESETS,
-                onSelect = onUpdateMaxOutputTokens,
-            )
-
-            Slider(
-                value = cfg.maxOutputTokens.toFloat(),
-                onValueChange = { raw ->
-                    val snapped = ((raw / 256f).roundToInt() * 256)
-                        .coerceIn(InferenceSettings.MIN_OUTPUT_TOKENS, InferenceSettings.MAX_TOKENS_32K)
-                    onUpdateMaxOutputTokens(snapped)
-                },
-                valueRange = InferenceSettings.MIN_OUTPUT_TOKENS.toFloat()..InferenceSettings.MAX_TOKENS_32K.toFloat(),
-            )
-            Text(
-                "Max output is synced so it never exceeds Context Window; selecting 16K or 32K expands Context Window automatically.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        // 3. Sampling & Accelerator Backend
-        SectionCard(
-            title = "Sampling & Compute Backend",
-            icon = Icons.Rounded.Speed,
-            subtitle = "Defaults applied to Playground and API calls when omitted",
-            trailing = {
-                TextButton(onClick = onResetSettings) { Text("Reset") }
-            },
-        ) {
-            Text("Preferred Accelerator", style = MaterialTheme.typography.labelLarge)
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                val backends = AcceleratorBackend.entries
-                backends.forEachIndexed { idx, backend ->
-                    SegmentedButton(
-                        selected = cfg.preferredBackend == backend,
-                        onClick = { onUpdateBackend(backend) },
-                        shape = SegmentedButtonDefaults.itemShape(index = idx, count = backends.size),
-                    ) {
-                        Text(backend.name, maxLines = 1)
-                    }
-                }
-            }
-
-            SliderSettingRow(
-                label = "Temperature",
-                valueLabel = String.format(Locale.US, "%.2f", cfg.temperature),
-                value = cfg.temperature,
-                range = 0f..2f,
-                onValueChange = { onUpdateTemperature((it * 20f).roundToInt() / 20f) },
-                helper = "Lower = deterministic, higher = more creative",
-            )
-            SliderSettingRow(
-                label = "Top-P (Nucleus)",
-                valueLabel = String.format(Locale.US, "%.2f", cfg.topP),
-                value = cfg.topP,
-                range = 0.05f..1.0f,
-                onValueChange = { onUpdateTopP((it * 20f).roundToInt() / 20f) },
-            )
-            SliderSettingRow(
-                label = "Top-K",
-                valueLabel = cfg.topK.toString(),
-                value = cfg.topK.toFloat(),
-                range = 1f..InferenceSettings.MAX_TOP_K.toFloat(),
-                onValueChange = { onUpdateTopK(it.roundToInt().coerceIn(1, InferenceSettings.MAX_TOP_K)) },
-            )
-        }
-
-        // 4. Gemma 4 & Gemma 3 Model Catalog / Installer
-        SectionCard(
-            title = "Install or Switch Model",
-            icon = Icons.Rounded.CloudDownload,
-            subtitle = "Gemma 4 (LiteRT-LM, no token needed) & Gemma 3 · ${state.memory.availableStorageMb} MB free",
-            trailing = {
-                IconButton(onClick = { installExpanded = !installExpanded }) {
-                    Icon(if (installExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore, "Toggle install section")
-                }
-            },
-        ) {
-            if (state.localModels.isNotEmpty()) {
-                Text("Downloaded Local Models", style = MaterialTheme.typography.labelLarge)
-                FlowRow(
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = state.model.model?.name ?: "No LLM Installed",
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = state.model.model?.let {
+                                "${it.version ?: it.format?.uppercase() ?: "Bundle"} · ${formatFileSize(it.fileSizeBytes)} · ${formatTokenShort(activeCtx)} ctx · $activeBackend"
+                            } ?: "Download a Gemma 4 model below to get started",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    StatusPill(stateLabel, badgeColor)
+                }
+
+                state.model.loadProgress?.let { p ->
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth())
+                        Text("${(p * 100).toInt()}% downloaded", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } ?: if (busy) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                } else Unit
+
+                state.model.errorMessage?.let { err ->
+                    Surface(color = sc.errorContainer, shape = MaterialTheme.shapes.small) {
+                        Text(err, color = sc.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth().padding(10.dp))
+                    }
+                }
+
+                if (state.requiresReload) {
+                    Surface(color = sc.warningContainer, shape = MaterialTheme.shapes.small) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "Reload to apply ${formatTokenShort(cfg.contextWindowTokens)} / ${cfg.preferredBackend}.",
+                                color = sc.warning,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = onReload, enabled = !busy) { Text("Apply") }
+                        }
+                    }
+                }
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (s == ModelState.READY || s == ModelState.GENERATING) {
+                        FilledTonalButton(
+                            onClick = onReload,
+                            enabled = !busy,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(Icons.Rounded.Refresh, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Reload")
+                        }
+                        OutlinedButton(
+                            onClick = onUnload,
+                            enabled = s == ModelState.READY,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Unload")
+                        }
+                    } else if (state.modelInstalled) {
+                        Button(
+                            onClick = onLoad,
+                            enabled = !busy,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(Icons.Rounded.PlayArrow, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (s == ModelState.LOADING) "Loading…" else "Load Model")
+                        }
+                    } else {
+                        Button(
+                            onClick = { catalogExpanded = true },
+                            enabled = !busy,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(Icons.Rounded.CloudDownload, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Choose Model to Download")
+                        }
+                    }
+
+                    if (state.modelInstalled) {
+                        IconButton(onClick = { showDeleteConfirm = true }, enabled = !busy) {
+                            Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete model", tint = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Installed Local Models (Compact one-tap switcher, shown only when >= 1 installed)
+        if (state.localModels.isNotEmpty()) {
+            SectionCard(
+                title = "Installed Models (${state.localModels.size})",
+                icon = Icons.Rounded.Folder,
+                subtitle = "${state.memory.availableStorageMb} MB device storage free",
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     state.localModels.forEach { local ->
                         val active = state.model.model?.name == local.name && state.model.model?.format == local.format
-                        FilterChip(
-                            selected = active,
-                            enabled = !busy,
-                            onClick = { onSelectLocalModel("${local.name}.${local.format}") },
-                            label = { Text("${local.name} (${formatFileSize(local.fileSizeBytes)})") },
-                        )
-                    }
-                }
-            }
-
-            AnimatedVisibility(visible = installExpanded) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        val tabs = ModelSourceFilter.entries
-                        tabs.forEachIndexed { idx, tab ->
-                            SegmentedButton(
-                                selected = sourceFilter == tab,
-                                onClick = { sourceFilter = tab },
-                                shape = SegmentedButtonDefaults.itemShape(index = idx, count = tabs.size),
+                        Surface(
+                            onClick = { if (!active && !busy) onSelectLocalModel("${local.name}.${local.format}") },
+                            color = if (active) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                            else MaterialTheme.colorScheme.surfaceContainerLow,
+                            shape = MaterialTheme.shapes.small,
+                            border = BorderStroke(
+                                width = if (active) 1.5.dp else 1.dp,
+                                color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                            ),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text(tab.label, maxLines = 1)
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        local.name,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        "${local.version ?: local.format?.uppercase() ?: "Model"} · ${formatFileSize(local.fileSizeBytes)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                if (active) {
+                                    Icon(Icons.Rounded.CheckCircle, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                                } else {
+                                    Text("Switch", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                                }
                             }
                         }
                     }
+                }
+            }
+        }
 
-                    when (sourceFilter) {
-                        ModelSourceFilter.GEMMA_4 -> {
-                            ModelPresetList(
-                                presets = ModelCatalog.byFamily(ModelFamily.GEMMA_4),
-                                selectedRepo = cfg.huggingFaceRepo,
-                                selectedFile = cfg.huggingFaceFile,
-                                availStorageMb = state.memory.availableStorageMb,
-                                totalRamMb = state.memory.deviceTotalMb,
-                                onSelect = { p -> onUpdateHuggingFaceSource(p.repo, p.fileName) },
+        // 3. Download / Import Catalog (Clean, scannable, collapsible when a model is already installed)
+        SectionCard(
+            title = "Download or Import",
+            icon = Icons.Rounded.CloudDownload,
+            subtitle = if (catalogExpanded) "Gemma 4 LiteRT-LM open weights (no token required) · ${state.memory.availableStorageMb} MB free"
+            else "Tap to browse Gemma 4 variants or import a local .litertlm file",
+            trailing = {
+                IconButton(onClick = { catalogExpanded = !catalogExpanded }) {
+                    Icon(
+                        if (catalogExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                        contentDescription = "Toggle catalog",
+                    )
+                }
+            },
+        ) {
+            AnimatedVisibility(visible = catalogExpanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        ModelCatalogFilter.entries.forEach { tab ->
+                            FilterChip(
+                                selected = filter == tab,
+                                onClick = { filter = tab },
+                                label = { Text(tab.label) },
                             )
                         }
-                        ModelSourceFilter.GEMMA_3 -> {
-                            ModelPresetList(
-                                presets = ModelCatalog.byFamily(ModelFamily.GEMMA_3),
-                                selectedRepo = cfg.huggingFaceRepo,
-                                selectedFile = cfg.huggingFaceFile,
-                                availStorageMb = state.memory.availableStorageMb,
-                                totalRamMb = state.memory.deviceTotalMb,
-                                onSelect = { p -> onUpdateHuggingFaceSource(p.repo, p.fileName) },
-                            )
-                        }
-                        ModelSourceFilter.CUSTOM -> {
+                    }
+
+                    when (filter) {
+                        ModelCatalogFilter.CUSTOM -> {
                             OutlinedTextField(
                                 value = customRepo,
                                 onValueChange = { customRepo = it; onUpdateHuggingFaceSource(it, customFile) },
@@ -386,30 +305,23 @@ fun ModelSettingsTab(
                             OutlinedTextField(
                                 value = customFile,
                                 onValueChange = { customFile = it; onUpdateHuggingFaceSource(customRepo, it) },
-                                label = { Text("Model file name (.litertlm or .task)") },
+                                label = { Text("Gemma 4 model file (.litertlm)") },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
-                    }
-
-                    if (!requiresToken) {
-                        Surface(color = sc.readyContainer, shape = MaterialTheme.shapes.small) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(10.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    "Apache-2.0 open weights — ready to download without a Hugging Face token.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = sc.ready,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                TextButton(onClick = { showOptionalToken = !showOptionalToken }) {
-                                    Text(if (showOptionalToken) "Hide Token" else "HF Token")
-                                }
+                        else -> {
+                            val presets = when (filter) {
+                                ModelCatalogFilter.RECOMMENDED -> ModelCatalog.ALL_PRESETS.filter { it.id in RECOMMENDED_PRESET_IDS }
+                                ModelCatalogFilter.GEMMA_4 -> ModelCatalog.byFamily(ModelFamily.GEMMA_4)
+                                ModelCatalogFilter.CUSTOM -> emptyList()
                             }
+                            CompactPresetList(
+                                presets = presets,
+                                selectedRepo = cfg.huggingFaceRepo,
+                                selectedFile = cfg.huggingFaceFile,
+                                onSelect = { p -> onUpdateHuggingFaceSource(p.repo, p.fileName) },
+                            )
                         }
                     }
 
@@ -419,8 +331,8 @@ fun ModelSettingsTab(
                             onValueChange = { hfTokenInput = it },
                             label = {
                                 Text(
-                                    if (state.hasToken) "Hugging Face token (saved in Keystore)"
-                                    else if (requiresToken) "Hugging Face token (required for Gemma 3)"
+                                    if (state.hasToken) "HF token (saved in Keystore)"
+                                    else if (requiresToken) "Hugging Face token (required for gated repo)"
                                     else "Hugging Face token (optional)",
                                 )
                             },
@@ -431,13 +343,12 @@ fun ModelSettingsTab(
                                 IconButton(onClick = { tokenVisible = !tokenVisible }) {
                                     Icon(
                                         if (tokenVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
-                                        contentDescription = "Toggle token visibility",
+                                        contentDescription = "Toggle visibility",
                                     )
                                 }
                             },
                             modifier = Modifier.fillMaxWidth(),
                         )
-
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(
                                 onClick = { onSaveToken(hfTokenInput); hfTokenInput = "" },
@@ -445,8 +356,24 @@ fun ModelSettingsTab(
                                 modifier = Modifier.weight(1f),
                             ) { Text("Save Token") }
                             if (state.hasToken) {
-                                TextButton(onClick = onClearToken) { Text("Clear Token") }
+                                TextButton(onClick = onClearToken) { Text("Clear") }
                             }
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "Open weights — no token needed",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = sc.ready,
+                            )
+                            TextButton(
+                                onClick = { showOptionalToken = true },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            ) { Text("HF Token") }
                         }
                     }
 
@@ -458,8 +385,8 @@ fun ModelSettingsTab(
                             Surface(color = sc.warningContainer, shape = MaterialTheme.shapes.small) {
                                 Text(
                                     buildString {
-                                        if (lowStorage) append("Storage warning: needs ~$sizeMb MB, device has ${state.memory.availableStorageMb} MB free. ")
-                                        if (lowRam) append("RAM advisory: recommends ${p.minRecommendedRamGb} GB+ RAM (device has ${state.memory.deviceTotalMb / 1024} GB).")
+                                        if (lowStorage) append("Needs ~$sizeMb MB free (${state.memory.availableStorageMb} MB available). ")
+                                        if (lowRam) append("Recommends ${p.minRecommendedRamGb} GB+ RAM.")
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = sc.warning,
@@ -486,8 +413,100 @@ fun ModelSettingsTab(
                         ) {
                             Icon(Icons.Rounded.FolderOpen, null, Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("Import File")
+                            Text("Import")
                         }
+                    }
+                }
+            }
+        }
+
+        // 4. Collapsible Advanced Tuning (Context, Output Cap, Backend, Sampling)
+        SectionCard(
+            title = "Advanced Tuning",
+            icon = Icons.Rounded.Tune,
+            subtitle = "${formatTokenShort(cfg.contextWindowTokens)} ctx · ${formatTokenShort(cfg.maxOutputTokens)} out · ${cfg.preferredBackend} · T=${String.format(Locale.US, "%.2f", cfg.temperature)}",
+            trailing = {
+                IconButton(onClick = { advancedExpanded = !advancedExpanded }) {
+                    Icon(
+                        if (advancedExpanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                        contentDescription = "Toggle advanced tuning",
+                    )
+                }
+            },
+        ) {
+            AnimatedVisibility(visible = advancedExpanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Accelerator Backend", style = MaterialTheme.typography.labelLarge)
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        val backends = AcceleratorBackend.entries
+                        backends.forEachIndexed { idx, backend ->
+                            SegmentedButton(
+                                selected = cfg.preferredBackend == backend,
+                                onClick = { onUpdateBackend(backend) },
+                                shape = SegmentedButtonDefaults.itemShape(index = idx, count = backends.size),
+                            ) {
+                                Text(backend.name, maxLines = 1)
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Context Window (${formatTokenShort(cfg.contextWindowTokens)})", style = MaterialTheme.typography.labelLarge)
+                        TextButton(onClick = { showCustomTokenDialog = true }, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                            Text("Exact")
+                        }
+                    }
+                    TokenPresetRow(
+                        selected = cfg.contextWindowTokens,
+                        presets = InferenceSettings.CONTEXT_PRESETS,
+                        onSelect = onUpdateContextWindow,
+                    )
+
+                    Text("Max Output Tokens (${formatTokenShort(cfg.maxOutputTokens)})", style = MaterialTheme.typography.labelLarge)
+                    TokenPresetRow(
+                        selected = cfg.maxOutputTokens,
+                        presets = InferenceSettings.OUTPUT_PRESETS,
+                        onSelect = onUpdateMaxOutputTokens,
+                    )
+
+                    if (cfg.contextWindowTokens > 4096) {
+                        Text(
+                            "High context (${formatTokenShort(cfg.contextWindowTokens)}) uses extra RAM (${state.memory.deviceAvailMb} MB free).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = sc.warning,
+                        )
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    SliderSettingRow(
+                        label = "Temperature",
+                        valueLabel = String.format(Locale.US, "%.2f", cfg.temperature),
+                        value = cfg.temperature,
+                        range = 0f..2f,
+                        onValueChange = { onUpdateTemperature((it * 20f).roundToInt() / 20f) },
+                    )
+                    SliderSettingRow(
+                        label = "Top-P",
+                        valueLabel = String.format(Locale.US, "%.2f", cfg.topP),
+                        value = cfg.topP,
+                        range = 0.05f..1.0f,
+                        onValueChange = { onUpdateTopP((it * 20f).roundToInt() / 20f) },
+                    )
+                    SliderSettingRow(
+                        label = "Top-K",
+                        valueLabel = cfg.topK.toString(),
+                        value = cfg.topK.toFloat(),
+                        range = 1f..InferenceSettings.MAX_TOP_K.toFloat(),
+                        onValueChange = { onUpdateTopK(it.roundToInt().coerceIn(1, InferenceSettings.MAX_TOP_K)) },
+                    )
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = onResetSettings) { Text("Reset Defaults") }
                     }
                 }
             }
@@ -526,65 +545,53 @@ fun ModelSettingsTab(
 }
 
 @Composable
-private fun ModelPresetList(
+private fun CompactPresetList(
     presets: List<ModelVariantPreset>,
     selectedRepo: String,
     selectedFile: String,
-    availStorageMb: Long,
-    totalRamMb: Long,
     onSelect: (ModelVariantPreset) -> Unit,
 ) {
     val sc = ProviderThemeDefaults.statusColors
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         presets.forEach { preset ->
             val selected = preset.repo.equals(selectedRepo, ignoreCase = true) &&
                 preset.fileName.equals(selectedFile, ignoreCase = true)
-            val border = if (selected) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
-            else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            val container = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.32f)
-            else MaterialTheme.colorScheme.surfaceContainerLow
-
-            OutlinedCard(
+            Surface(
                 onClick = { onSelect(preset) },
                 modifier = Modifier.fillMaxWidth(),
                 shape = MaterialTheme.shapes.small,
-                colors = CardDefaults.outlinedCardColors(containerColor = container),
-                border = border,
+                color = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.30f)
+                else MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(
+                    width = if (selected) 1.5.dp else 1.dp,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                ),
             ) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            preset.label,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        StatusPill(
-                            text = if (preset.gated) "HF Token" else "No HF Token",
-                            dotColor = if (preset.gated) sc.warning else sc.ready,
-                        )
-                    }
-                    Text(
-                        preset.subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(
+                        selected = selected,
+                        onClick = null,
+                        modifier = Modifier.size(20.dp),
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        StatusPill(preset.tier, MaterialTheme.colorScheme.primary)
-                        StatusPill(preset.runtime.label, MaterialTheme.colorScheme.secondary)
-                        StatusPill("${preset.minRecommendedRamGb}GB+ RAM", sc.neutral)
-                    }
-                    val sizeMb = preset.approxSizeBytes / 1_048_576L
-                    if (availStorageMb in 1 until (sizeMb + 64) || totalRamMb in 1 until (preset.minRecommendedRamGb * 1024L - 512L)) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
-                            "Needs ~${formatFileSize(preset.approxSizeBytes)} disk · ${preset.minRecommendedRamGb} GB+ RAM",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = sc.warning,
+                            text = preset.label,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = "${formatFileSize(preset.approxSizeBytes)} · ${preset.minRecommendedRamGb} GB+ RAM · ${preset.runtime.label}" +
+                                if (preset.gated) " · Token req." else "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (preset.gated) sc.warning else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }

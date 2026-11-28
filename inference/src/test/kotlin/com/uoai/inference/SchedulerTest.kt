@@ -24,14 +24,14 @@ class SchedulerTest {
         val rt = MockInferenceRuntime(tokenDelayMs = delayMs)
         val mgr = ModelManager(FileModelRepository(tmp.newFolder()), rt)
         runBlocking {
-            mgr.importModel("m.task", ByteArrayInputStream(ByteArray(11 * 1024 * 1024)))
+            mgr.importModel("gemma-4-E2B-it.litertlm", ByteArrayInputStream(ByteArray(11 * 1024 * 1024)))
             mgr.load()
         }
         return DefaultInferenceEngine(mgr, rt, scope, { r, _ -> records.add(r); if (r.status == RequestStatus.RUNNING) started.add(r.requestId) }, limits)
     }
 
     private fun req(id: String, client: String = "c", prio: Int = 0, text: String = "a b c d e") =
-        InferenceRequest(id, client, "gemma-3", listOf(ChatMessage("user", text)), GenerationParams(), prio)
+        InferenceRequest(id, client, "gemma-4-e2b", listOf(ChatMessage("user", text)), GenerationParams(), prio)
 
     @Test fun runsOneAtATimeInPriorityOrder() = runBlocking {
         val e = engine()
@@ -93,5 +93,46 @@ class SchedulerTest {
         try { e.generate(req("p3", "same")); fail("expected QueueFullException") } catch (_: QueueFullException) {}
         jobs.forEach { e.cancel("p${jobs.indexOf(it) + 1}") }
         jobs.joinAll()
+    }
+
+    @Test fun audioRequestRoutesToAudioCapableRuntime() = runBlocking {
+        val rt = MockInferenceRuntime(tokenDelayMs = 5, audioCapable = true)
+        val mgr = ModelManager(FileModelRepository(tmp.newFolder()), rt)
+        mgr.importModel("gemma-4-E2B-it.litertlm", ByteArrayInputStream(ByteArray(11 * 1024 * 1024)))
+        mgr.load()
+        assertTrue(mgr.status.value.supportsAudioInput)
+
+        val e = DefaultInferenceEngine(mgr, rt, scope)
+        val wav = ByteArray(128) { 1 }
+        val out = e.generate(
+            InferenceRequest(
+                requestId = "aud-1",
+                clientId = "dashboard",
+                modelId = "gemma-4-e2b",
+                messages = listOf(ChatMessage("user", "Transcribe this")),
+                audioWavBytes = wav,
+            ),
+        )
+        assertTrue(out.contains("[mock-audio 128B]"))
+        assertTrue(out.contains("Transcribe"))
+    }
+
+    @Test fun audioRequestFailsCleanlyOnTextOnlyRuntime() = runBlocking {
+        val e = engine(delayMs = 5)
+        assertFalse(e.modelStatus.value.supportsAudioInput)
+        val err = runCatching {
+            e.generate(
+                InferenceRequest(
+                    requestId = "aud-fail",
+                    clientId = "dashboard",
+                    modelId = "gemma-4-12b",
+                    messages = listOf(ChatMessage("user", "Transcribe")),
+                    audioWavBytes = ByteArray(64),
+                ),
+            )
+        }.exceptionOrNull()
+        assertTrue(err is UnsupportedOperationException)
+        // Subsequent text requests still succeed normally
+        assertTrue(e.generate(req("after-fail", text = "still ok")).contains("still ok"))
     }
 }

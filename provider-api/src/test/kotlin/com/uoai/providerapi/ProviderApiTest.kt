@@ -31,7 +31,7 @@ class ProviderApiTest {
         val rt = MockInferenceRuntime()
         val mgr = ModelManager(FileModelRepository(tmp.newFolder()), rt)
         runBlocking {
-            mgr.importModel("gemma3-1b-it-int4.task", ByteArrayInputStream(ByteArray(11 * 1024 * 1024)))
+            mgr.importModel("gemma-4-E2B-it.litertlm", ByteArrayInputStream(ByteArray(11 * 1024 * 1024)))
             if (load) mgr.load()
         }
         return DefaultInferenceEngine(mgr, rt, scope)
@@ -42,7 +42,7 @@ class ProviderApiTest {
         block()
     }
 
-    private val chatBody = """{"model":"gemma-3","messages":[{"role":"user","content":"hello"}]}"""
+    private val chatBody = """{"model":"gemma-4","messages":[{"role":"user","content":"hello"}]}"""
     private fun HttpRequestBuilder.auth() = header(HttpHeaders.Authorization, "Bearer secret")
     private fun HttpRequestBuilder.json(b: String) { contentType(ContentType.Application.Json); setBody(b) }
 
@@ -92,7 +92,7 @@ class ProviderApiTest {
     }
 
     @Test fun modelsAndCapabilities() = app(ready()) {
-        assertTrue(client.get("/v1/models") { auth() }.bodyAsText().contains("\"id\":\"gemma-3\""))
+        assertTrue(client.get("/v1/models") { auth() }.bodyAsText().contains("\"id\":\"gemma-4-e2b\""))
         assertTrue(client.get("/v1/capabilities") { auth() }.bodyAsText().contains("\"embeddings\":false"))
     }
 
@@ -108,7 +108,7 @@ class ProviderApiTest {
     }
 
     @Test fun clientToolCallRequiresPermissionAndParsesToolCalls() {
-        val toolBody = """{"model":"gemma-3","messages":[{"role":"user","content":"call <tool_call>{\"name\":\"read_doc\",\"arguments\":{\"id\":\"42\"}}</tool_call>"}],"tools":[{"type":"function","function":{"name":"read_doc","description":"Read local doc"}}]}"""
+        val toolBody = """{"model":"gemma-4","messages":[{"role":"user","content":"call <tool_call>{\"name\":\"read_doc\",\"arguments\":{\"id\":\"42\"}}</tool_call>"}],"tools":[{"type":"function","function":{"name":"read_doc","description":"Read local doc"}}]}"""
         // Without toolCalling permission -> 403
         permissions = ClientPermissions(chat = true, toolCalling = false)
         app(ready()) {
@@ -138,13 +138,13 @@ class ProviderApiTest {
 
             val ok32k = client.post("/v1/chat/completions") {
                 auth()
-                json("""{"model":"gemma-3","messages":[{"role":"user","content":"hello"}],"max_tokens":32768}""")
+                json("""{"model":"gemma-4","messages":[{"role":"user","content":"hello"}],"max_tokens":32768}""")
             }
             assertEquals(HttpStatusCode.OK, ok32k.status)
 
             val overLimit = client.post("/v1/chat/completions") {
                 auth()
-                json("""{"model":"gemma-3","messages":[{"role":"user","content":"hello"}],"max_tokens":40000}""")
+                json("""{"model":"gemma-4","messages":[{"role":"user","content":"hello"}],"max_tokens":40000}""")
             }
             assertEquals(HttpStatusCode.BadRequest, overLimit.status)
         }

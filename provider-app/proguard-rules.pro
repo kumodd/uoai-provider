@@ -10,9 +10,11 @@
 }
 -keep,includedescriptorclasses class com.uoai.**$$serializer { *; }
 
-# Keep public & serialized models across DTO, inference, plugins, client management, and core
+# Keep public & serialized models across DTO, inference, asr, plugins, client management, and core
 -keep class com.uoai.providerapi.dto.** { *; }
 -keep class com.uoai.inference.** { *; }
+-keep class com.uoai.asr.** { *; }
+-keep class com.uoai.core.resources.** { *; }
 -keep class com.uoai.plugins.models.** { *; }
 -keep class com.uoai.clients.** { *; }
 -keep class com.uoai.core.database.** { *; }
@@ -22,12 +24,11 @@
 -keep class com.uoai.provider.registration.RegistrationActivity { *; }
 -keep class com.uoai.provider.service.ProviderService { *; }
 
-# Keep JNI native methods and inference runtime adapters
+# Keep JNI native methods and LiteRT-LM inference runtime adapters
 -keepclasseswithmembernames,includedescriptorclasses class * {
     native <methods>;
 }
 -keep class com.google.ai.edge.litertlm.** { *; }
--keep class com.google.mediapipe.** { *; }
 -keep class com.google.protobuf.** { *; }
 
 # Keep Ktor CIO HTTP/SSE server internals reflected by coroutines / serialization
@@ -47,14 +48,9 @@
 -dontwarn javax.naming.**
 -dontwarn sun.misc.Unsafe
 
-# MediaPipe tasks-genai compile-time annotations & optional image-framework references
+# Protobuf compile-time annotations
 -dontwarn com.google.auto.value.AutoValue$Builder
 -dontwarn com.google.auto.value.AutoValue
--dontwarn com.google.mediapipe.framework.image.BitmapExtractor
--dontwarn com.google.mediapipe.framework.image.ByteBufferExtractor
--dontwarn com.google.mediapipe.framework.image.MPImage
--dontwarn com.google.mediapipe.framework.image.MPImageProperties
--dontwarn com.google.mediapipe.framework.image.MediaImageExtractor
 -dontwarn com.google.protobuf.Internal$ProtoMethodMayReturnNull
 -dontwarn com.google.protobuf.Internal$ProtoNonnullApi
 -dontwarn com.google.protobuf.ProtoField

@@ -7,6 +7,9 @@ dependencyResolutionManagement {
 }
 rootProject.name = "UniversalOfflineAI"
 include(
-    ":provider-app", ":core", ":inference", ":provider-api", ":client-management",
-    ":plugins", ":android-integration", ":sdk", ":sample-client",
+    ":provider-app", ":core", ":inference", ":asr", ":provider-api", ":client-management",
+    ":plugins", ":android-integration", ":sdk",
 )
+if (file("sample-client").isDirectory) {
+    include(":sample-client")
+}

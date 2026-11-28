@@ -213,7 +213,7 @@ class DashboardViewModel @Inject constructor(
         viewModelScope.launch(dispatchers.io) {
             val name = context.contentResolver.query(uri, null, null, null, null)?.use {
                 if (it.moveToFirst()) it.getString(it.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME)) else null
-            } ?: "model.task"
+            } ?: "gemma-4.litertlm"
             val input = context.contentResolver.openInputStream(uri) ?: return@launch
             manager.importModel(name, input)
         }

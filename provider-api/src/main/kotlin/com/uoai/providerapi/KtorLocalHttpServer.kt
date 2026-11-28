@@ -1,9 +1,19 @@
 package com.uoai.providerapi
 
+import com.uoai.asr.AsrEngine
+import com.uoai.asr.AsrModelManager
+import com.uoai.asr.AsrSettings
+import com.uoai.asr.audio.AudioDecoder
+import com.uoai.asr.audio.DefaultAudioDecoder
+import com.uoai.asr.engines.HinglishModelManager
+import com.uoai.asr.engines.SpeechEngineRegistry
 import com.uoai.clients.ClientRegistry
 import com.uoai.inference.InferenceEngine
 import com.uoai.inference.InferenceSettings
 import com.uoai.plugins.PluginRegistry
+import com.uoai.providerapi.external.ExternalAudioProviderClient
+import com.uoai.providerapi.external.ExternalAudioProviderRegistry
+import com.uoai.providerapi.external.HttpExternalAudioProviderClient
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
@@ -22,6 +32,16 @@ class KtorLocalHttpServer(
     private val config: ApiConfig = ApiConfig(),
     private val plugins: PluginRegistry? = null,
     private val settingsProvider: () -> InferenceSettings = { InferenceSettings() },
+    private val asrEngine: AsrEngine? = null,
+    private val asrModelManager: AsrModelManager? = null,
+    private val asrSettingsProvider: () -> AsrSettings = { AsrSettings() },
+    private val audioDecoder: AudioDecoder = DefaultAudioDecoder(),
+    private val asrTempStore: AsrTempFileStore? = null,
+    private val asrAuditLogger: AsrAuditLogger? = null,
+    private val speechEngineRegistry: SpeechEngineRegistry? = null,
+    private val hinglishModelManager: HinglishModelManager? = null,
+    private val externalProviderRegistry: ExternalAudioProviderRegistry = ExternalAudioProviderRegistry(),
+    private val externalProviderClient: ExternalAudioProviderClient = HttpExternalAudioProviderClient(),
 ) : LocalHttpServer {
     private val lock = Mutex()
     private var server: EmbeddedServer<*, *>? = null
@@ -35,7 +55,23 @@ class KtorLocalHttpServer(
         withContext(Dispatchers.IO) {
             try {
                 val s = embeddedServer(CIO, port = port, host = host) {
-                    providerApi(inferenceEngine, registry, config, plugins, settingsProvider)
+                    providerApi(
+                        engine = inferenceEngine,
+                        registry = registry,
+                        config = config,
+                        plugins = plugins,
+                        settingsProvider = settingsProvider,
+                        asrEngine = asrEngine,
+                        asrModelManager = asrModelManager,
+                        asrSettingsProvider = asrSettingsProvider,
+                        audioDecoder = audioDecoder,
+                        asrTempStore = asrTempStore,
+                        asrAuditLogger = asrAuditLogger,
+                        speechEngineRegistry = speechEngineRegistry,
+                        hinglishModelManager = hinglishModelManager,
+                        externalProviderRegistry = externalProviderRegistry,
+                        externalProviderClient = externalProviderClient,
+                    )
                 }
                 s.start(wait = false)
                 server = s; _running.value = true; _error.value = null

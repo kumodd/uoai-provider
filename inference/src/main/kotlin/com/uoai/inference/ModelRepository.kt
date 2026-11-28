@@ -10,7 +10,7 @@ interface ModelRepository {
     fun save(info: ModelInfo, file: File)
     fun clear()
 
-    /** Returns all valid local `.task` / `.litertlm` bundles found in [modelsDir]. */
+    /** Returns all valid local Gemma 4 `.litertlm` bundles found in [modelsDir]. */
     fun listLocalModels(): List<ModelInfo> = listOfNotNull(installed())
 
     /** Sets the active local model by filename or stem and returns its metadata, or null if missing. */

@@ -24,6 +24,9 @@ android {
         targetSdk = 36
         versionCode = 4
         versionName = "1.0.1"
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
     signingConfigs {
         create("release") {
@@ -72,6 +75,7 @@ kotlin {
 dependencies {
     implementation(project(":core"))
     implementation(project(":inference"))
+    implementation(project(":asr"))
     implementation(project(":provider-api"))
     implementation(project(":client-management"))
     implementation(project(":plugins"))

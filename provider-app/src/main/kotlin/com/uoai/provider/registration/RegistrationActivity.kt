@@ -120,6 +120,7 @@ private fun AskContent(
     var chat by remember { mutableStateOf(true) }
     var streaming by remember { mutableStateOf(true) }
     var tools by remember { mutableStateOf(false) }
+    var speechToText by remember { mutableStateOf(true) }
     var maxTokens by remember { mutableStateOf(4096) }
 
     OutlinedCard(
@@ -160,6 +161,10 @@ private fun AskContent(
                 Text("Tool calling (client tools)", style = MaterialTheme.typography.bodyMedium)
                 Switch(tools, { tools = it })
             }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Speech recognition (ASR)", style = MaterialTheme.typography.bodyMedium)
+                Switch(speechToText, { speechToText = it })
+            }
 
             Text("Max Token Cap (${formatTokenShort(maxTokens)})", style = MaterialTheme.typography.labelLarge)
             TokenPresetRow(
@@ -171,7 +176,18 @@ private fun AskContent(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(onClick = { onReject(c) }, modifier = Modifier.weight(1f)) { Text("Reject") }
                 Button(
-                    onClick = { onApprove(c, ClientPermissions(chat = chat, streaming = streaming, toolCalling = tools, maxTokens = maxTokens)) },
+                    onClick = {
+                        onApprove(
+                            c,
+                            ClientPermissions(
+                                chat = chat,
+                                streaming = streaming,
+                                toolCalling = tools,
+                                maxTokens = maxTokens,
+                                speechToText = speechToText,
+                            ),
+                        )
+                    },
                     modifier = Modifier.weight(1f),
                 ) { Text("Approve") }
             }

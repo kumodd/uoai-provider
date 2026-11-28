@@ -14,7 +14,32 @@ data class InferenceRequest(
     val params: GenerationParams = GenerationParams(),
     /** Higher runs first; equal priorities are FIFO. */
     val priority: Int = 0,
-)
+    /** Optional 16 kHz mono WAV audio clip attached to the final user turn (multimodal Gemma 4). */
+    val audioWavBytes: ByteArray? = null,
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is InferenceRequest) return false
+        return requestId == other.requestId &&
+            clientId == other.clientId &&
+            modelId == other.modelId &&
+            messages == other.messages &&
+            params == other.params &&
+            priority == other.priority &&
+            audioWavBytes.contentEquals(other.audioWavBytes)
+    }
+
+    override fun hashCode(): Int {
+        var result = requestId.hashCode()
+        result = 31 * result + clientId.hashCode()
+        result = 31 * result + modelId.hashCode()
+        result = 31 * result + messages.hashCode()
+        result = 31 * result + params.hashCode()
+        result = 31 * result + priority
+        result = 31 * result + (audioWavBytes?.contentHashCode() ?: 0)
+        return result
+    }
+}
 
 enum class RequestStatus { QUEUED, RUNNING, COMPLETED, CANCELLED, FAILED }
 

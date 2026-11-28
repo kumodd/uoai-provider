@@ -13,6 +13,6 @@ object ModelIntegrity {
         return md.digest().joinToString("") { "%02x".format(it) }
     }
 
-    /** Cheap sanity check: .task/.litertlm are zip/flatbuffer containers and are never tiny. */
+    /** Cheap sanity check: Gemma 4 .litertlm bundles are flatbuffer containers and are never tiny. */
     fun looksLikeModel(file: File): Boolean = file.isFile && file.length() > 10L * 1024 * 1024
 }

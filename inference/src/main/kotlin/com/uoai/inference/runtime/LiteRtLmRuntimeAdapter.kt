@@ -1,6 +1,7 @@
 package com.uoai.inference.runtime
 
 import android.content.Context
+import android.util.Log
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
@@ -21,13 +22,16 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * LiteRT-LM runtime adapter (`litertlm-android` 0.19.x) for Gemma 4 & Gemma 3 `.litertlm` bundles.
- * Supports CPU (XNNPACK), GPU (ML Drift), and NPU backends plus multi-turn conversation templating.
+ * LiteRT-LM runtime adapter (`litertlm-android` 0.19.x) for the Gemma 4 `.litertlm` model family.
+ * Supports CPU (XNNPACK), GPU (ML Drift), NPU backends, multi-turn conversation templating, and
+ * native multimodal audio input on Gemma 4 bundles with an embedded audio encoder (E2B / E4B).
  */
 class LiteRtLmRuntimeAdapter(context: Context) : InferenceRuntime {
     private val appContext = context.applicationContext
     @Volatile private var engine: Engine? = null
     @Volatile override var loadedConfig: RuntimeLoadConfig? = null
+        private set
+    @Volatile override var supportsAudioInput: Boolean = false
         private set
 
     override val isLoaded: Boolean get() = engine != null
@@ -39,34 +43,55 @@ class LiteRtLmRuntimeAdapter(context: Context) : InferenceRuntime {
             InferenceSettings.MAX_TOKENS_32K,
         )
         val safeTopK = config.maxTopK.coerceIn(1, InferenceSettings.MAX_TOP_K)
-        val candidates = backendCandidates(File(modelPath).name, config.preferredBackend)
+        val fileName = File(modelPath).name
+        val candidates = backendCandidates(fileName, config.preferredBackend)
 
         var lastError: Throwable? = null
         for ((accType, backend) in candidates) {
-            var candidateEngine: Engine? = null
-            try {
-                val cfg = EngineConfig(
-                    modelPath = modelPath,
-                    backend = backend,
-                    maxNumTokens = safeCtx,
-                    cacheDir = appContext.cacheDir.absolutePath,
-                )
-                candidateEngine = Engine(cfg)
-                candidateEngine.initialize()
-                engine = candidateEngine
-                loadedConfig = config.copy(
-                    contextWindowTokens = safeCtx,
-                    maxTopK = safeTopK,
-                    preferredBackend = accType,
-                )
-                return@withContext
-            } catch (e: Throwable) {
-                runCatching { candidateEngine?.close() }
-                lastError = e
+            val audioCandidates: List<Backend?> = if (accType == AcceleratorBackend.GPU) {
+                // Gemma 4 .litertlm runs its Conformer audio encoder on CPU by default; fall back to GPU or text-only.
+                listOf(Backend.CPU(), Backend.GPU(), null)
+            } else {
+                listOf(Backend.CPU(), null)
+            }
+
+            for (audioBackend in audioCandidates) {
+                var candidateEngine: Engine? = null
+                try {
+                    val cfg = EngineConfig(
+                        modelPath = modelPath,
+                        backend = backend,
+                        audioBackend = audioBackend,
+                        maxNumTokens = safeCtx,
+                        cacheDir = appContext.cacheDir.absolutePath,
+                    )
+                    candidateEngine = Engine(cfg)
+                    candidateEngine.initialize()
+                    engine = candidateEngine
+                    supportsAudioInput = audioBackend != null
+                    loadedConfig = config.copy(
+                        contextWindowTokens = safeCtx,
+                        maxTopK = safeTopK,
+                        preferredBackend = accType,
+                    )
+                    Log.i(
+                        TAG,
+                        "Loaded $fileName on $accType (audioBackend=${audioBackend?.name ?: "none"}, ctx=$safeCtx)",
+                    )
+                    return@withContext
+                } catch (e: Throwable) {
+                    runCatching { candidateEngine?.close() }
+                    Log.w(
+                        TAG,
+                        "Init failed for $fileName on $accType (audioBackend=${audioBackend?.name ?: "none"}): ${e.message}",
+                    )
+                    lastError = e
+                }
             }
         }
         engine = null
         loadedConfig = null
+        supportsAudioInput = false
         val hint = if (safeCtx > 4096) {
             " High context (${safeCtx}) or model size may exceed device RAM."
         } else {
@@ -107,13 +132,33 @@ class LiteRtLmRuntimeAdapter(context: Context) : InferenceRuntime {
         runCatching { engine?.close() }
         engine = null
         loadedConfig = null
+        supportsAudioInput = false
     }
 
     override fun generate(prompt: String, params: GenerationParams): Flow<String> =
         generateMessages(listOf(ChatMessage("user", prompt)), params)
 
-    override fun generateMessages(messages: List<ChatMessage>, params: GenerationParams): Flow<String> = flow {
+    override fun generateMessages(messages: List<ChatMessage>, params: GenerationParams): Flow<String> =
+        streamConversation(messages = messages, audioWavBytes = null, params = params)
+
+    override fun generateWithAudio(
+        messages: List<ChatMessage>,
+        audioWavBytes: ByteArray,
+        params: GenerationParams,
+    ): Flow<String> = streamConversation(messages = messages, audioWavBytes = audioWavBytes, params = params)
+
+    private fun streamConversation(
+        messages: List<ChatMessage>,
+        audioWavBytes: ByteArray?,
+        params: GenerationParams,
+    ): Flow<String> = flow {
         val activeEngine = checkNotNull(engine) { "Model not loaded" }
+        if (audioWavBytes != null && !supportsAudioInput) {
+            throw UnsupportedOperationException(
+                "Loaded model has no active audio encoder. Load a multimodal Gemma 4 E2B/E4B (.litertlm) model.",
+            )
+        }
+
         val systemText = messages.filter { it.role == "system" }
             .joinToString("\n\n") { it.content }
             .takeIf { it.isNotBlank() }
@@ -149,7 +194,16 @@ class LiteRtLmRuntimeAdapter(context: Context) : InferenceRuntime {
 
         val conversation = activeEngine.createConversation(convConfig)
         try {
-            conversation.sendMessageAsync(lastUserText).collect { msg ->
+            val stream = if (audioWavBytes != null) {
+                val parts = buildList<Content> {
+                    add(Content.AudioBytes(audioWavBytes))
+                    if (lastUserText.isNotBlank()) add(Content.Text(lastUserText))
+                }
+                conversation.sendMessageAsync(Contents.of(parts))
+            } else {
+                conversation.sendMessageAsync(lastUserText)
+            }
+            stream.collect { msg ->
                 val chunk = msg.contents.contents
                     .filterIsInstance<Content.Text>()
                     .joinToString("") { it.text }
@@ -160,5 +214,9 @@ class LiteRtLmRuntimeAdapter(context: Context) : InferenceRuntime {
             runCatching { conversation.close() }
         }
     }.flowOn(Dispatchers.IO)
+
+    private companion object {
+        const val TAG = "UOAI-LiteRtLm"
+    }
 }
 

@@ -56,7 +56,7 @@ class InferenceSettingsTest {
         val rt = MockInferenceRuntime()
         val settingsRepo = FileInferenceSettingsRepository(File(tmp.newFolder(), "settings.json"))
         val mgr = ModelManager(FileModelRepository(tmp.newFolder()), rt, settingsRepository = settingsRepo)
-        mgr.importModel("gemma3-1b-it-int4.task", ByteArrayInputStream(ByteArray(11 * 1024 * 1024)))
+        mgr.importModel("gemma-4-E2B-it.litertlm", ByteArrayInputStream(ByteArray(11 * 1024 * 1024)))
 
         mgr.load()
         assertEquals(4096, mgr.status.value.loadedConfig?.contextWindowTokens)

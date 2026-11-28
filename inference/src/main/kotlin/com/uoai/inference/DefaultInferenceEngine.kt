@@ -1,5 +1,6 @@
 package com.uoai.inference
 
+import com.uoai.core.resources.ComputeResourceCoordinator
 import com.uoai.inference.runtime.InferenceRuntime
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -30,6 +31,7 @@ class DefaultInferenceEngine(
     private val recorder: RequestRecorder = RequestRecorder.None,
     private val limits: QueueLimits = QueueLimits(),
     private val clock: () -> Long = System::currentTimeMillis,
+    private val resourceCoordinator: ComputeResourceCoordinator? = null,
 ) : InferenceEngine {
 
     private class Ticket(val request: InferenceRequest, val seq: Long, val createdAt: Long) {
@@ -120,10 +122,24 @@ class DefaultInferenceEngine(
         manager.markGenerating(true)
         var outcome = RequestStatus.COMPLETED
         var error: String? = null
+        val onCpu = runtime.loadedConfig?.preferredBackend == AcceleratorBackend.CPU
         val job = scope.launch {
             try {
                 check(runtime.isLoaded) { "Model not loaded" }
-                runtime.generateMessages(t.request.messages, t.request.params).collect { t.channel.trySend(it) }
+                val audio = t.request.audioWavBytes
+                val execute: suspend () -> Unit = {
+                    val stream = if (audio != null) {
+                        runtime.generateWithAudio(t.request.messages, audio, t.request.params)
+                    } else {
+                        runtime.generateMessages(t.request.messages, t.request.params)
+                    }
+                    stream.collect { t.channel.trySend(it) }
+                }
+                if (resourceCoordinator != null) {
+                    resourceCoordinator.withLlmExecution(onCpu = onCpu) { execute() }
+                } else {
+                    execute()
+                }
                 t.channel.close()
             } catch (e: CancellationException) {
                 outcome = RequestStatus.CANCELLED

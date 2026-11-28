@@ -5,7 +5,9 @@
 **Provider Package:** `com.uoai.provider`  
 **Registration Intent Action:** `com.uoai.provider.action.REGISTER`  
 
-**Universal Offline AI Provider** exposes a centralized, single-instance on-device Gemma 3 or Gemma 4 LLM over a loopback-only HTTP + Server-Sent Events (SSE) API. Any independently installed Android application can integrate with this API—either via the zero-config Kotlin SDK (`sdk-release.aar`, ~90 KB) or directly via HTTP/SSE—without bundling model weights or an inference runtime.
+**Universal Offline AI Provider** exposes a centralized, single-instance on-device **Gemma 4** multimodal LLM (via LiteRT-LM) plus dedicated on-device ASR engines (Whisper, AksharSTT v4, Shruti) and configurable external audio inference providers over a loopback-only HTTP + Server-Sent Events (SSE) API. Any independently installed Android application can integrate with this API—either via the zero-config Kotlin SDK (`sdk-release.aar`) or directly via HTTP/SSE—without bundling model weights or an inference runtime.
+
+> **Audio & External Inference API Guide:** For full documentation of `/v1/audio/transcriptions`, `/v1/audio/stream`, `/v1/audio/providers`, direct Gemma 4 multimodal transcription, Whisper/Hinglish ASR, and external inference provider routing, see [AUDIO_API_DOCUMENTATION.md](./AUDIO_API_DOCUMENTATION.md).
 
 ---
 
@@ -26,7 +28,7 @@
 
 ### Key Principles
 - **Offline & On-Device:** All communication stays on `127.0.0.1:8765` (loopback only; never exposed on `0.0.0.0`). Zero internet access is required once the provider has installed the model.
-- **One Model, Multiple Clients:** All registered client apps share one loaded Gemma 3 instance managed by a centralized priority queue (`DefaultInferenceEngine`).
+- **One Model, Multiple Clients:** All registered client apps share one loaded **Gemma 4** instance managed by a centralized priority queue (`DefaultInferenceEngine`).
 - **Loopback Is Not Authentication:** Every API endpoint except `GET /v1/health` requires a per-client `Authorization: Bearer uoai_<token>` header obtained through OS-verified Android Activity registration.
 
 ### Integration Lifecycle
@@ -56,7 +58,14 @@ Client Android App                              Universal Offline AI Provider
 | `GET` | `/v1/models` | Yes | Installed model metadata & active `context_window` |
 | `GET` | `/v1/capabilities` | Yes | Supported features, token limits, `context_window_tokens`, enabled `provider_tools` |
 | `POST` | `/v1/chat/completions` | Yes | OpenAI-compatible chat completion (`stream: false` JSON or `stream: true` SSE) |
-| `POST` | `/v1/cancel` | Yes | Cancels a queued or running request owned by the caller |
+| `POST` | `/v1/audio/transcriptions` | Yes | Audio transcription via Gemma 4 direct multimodal (preferred), Whisper, Cactus Hinglish, or external provider |
+| `POST` | `/v1/audio/stream` | Yes | SSE streaming audio transcription (Gemma 4, Whisper, Cactus, or external provider) |
+| `GET` | `/v1/audio/models` | Yes | Lists all available local & external audio transcription models |
+| `GET/POST/DELETE` | `/v1/audio/providers` | Yes | Lists, registers, or deletes external audio inference providers |
+| `GET` | `/v1/audio/status` | Yes | Live audio engine status (`gemma4_audio_ready`, preferred provider, queue depth) |
+| `POST` | `/v1/audio/models/load` | Yes | Preload a local Whisper or Cactus ASR model (`asr_model_control`) |
+| `POST` | `/v1/audio/models/unload` | Yes | Unload active local Whisper/Cactus ASR models (`asr_model_control`) |
+| `POST` | `/v1/cancel` | Yes | Cancels a queued or running LLM or audio request owned by the caller |
 
 | Limit / Policy | Value | Notes |
 |---|---|---|
@@ -113,7 +122,7 @@ Client apps using JSON configuration or the SDK `ClientConfig` class follow this
   "provider": "universal.offline.ai",
   "connection": "http",
   "baseUrl": "http://127.0.0.1:8765/v1",
-  "model": "gemma-3",
+  "model": "gemma-4",
   "features": [
     "chat",
     "streaming",
@@ -218,9 +227,8 @@ Lists the installed/active model managed by the provider and its configured/acti
   ]
 }
 ```
-Supported model IDs derived from installed bundles:
-- **Gemma 4 (LiteRT-LM):** `gemma-4-e2b`, `gemma-4-e4b`, `gemma-4-12b`, `gemma-4-26b-a4b`, `gemma-4-31b` (also accepts family alias `"gemma-4"`, `"auto"`, or `"default"` when a Gemma 4 bundle is active)
-- **Gemma 3 (MediaPipe / LiteRT-LM):** `gemma-3` (also accepts `"auto"` or `"default"`)
+Supported model IDs derived from installed Gemma 4 LiteRT-LM bundles:
+- **Gemma 4 (LiteRT-LM):** `gemma-4-e2b` *(Audio + Text)*, `gemma-4-e4b` *(Audio + Text)*, `gemma-4-12b`, `gemma-4-26b-a4b`, `gemma-4-31b` (also accepts family alias `"gemma-4"`, `"auto"`, or `"default"`).
 
 If no model is installed yet, `data` is `[]`.
 
@@ -286,7 +294,7 @@ Every `200 OK` response includes header `X-Request-Id: chatcmpl-<uuid>` matching
 **Request:**
 ```json
 {
-  "model": "gemma-3",
+  "model": "gemma-4",
   "messages": [
     { "role": "system", "content": "Be concise." },
     { "role": "user", "content": "What is the capital of France?" }
@@ -303,7 +311,7 @@ Every `200 OK` response includes header `X-Request-Id: chatcmpl-<uuid>` matching
   "id": "chatcmpl-d425bd9b-a9a2-44f1-9cb1-53fb58590ddb",
   "object": "chat.completion",
   "created": 1795105164,
-  "model": "gemma-3",
+  "model": "gemma-4",
   "choices": [
     {
       "index": 0,
@@ -375,7 +383,7 @@ Your app supplies tool definitions; the provider never touches your app's privat
 **Turn 1 — Request with client tool schema:**
 ```json
 {
-  "model": "gemma-3",
+  "model": "gemma-4",
   "messages": [
     { "role": "user", "content": "Summarize the currently open note." }
   ],
@@ -404,7 +412,7 @@ Your app supplies tool definitions; the provider never touches your app's privat
   "id": "chatcmpl-...",
   "object": "chat.completion",
   "created": 1795106000,
-  "model": "gemma-3",
+  "model": "gemma-4",
   "choices": [
     {
       "index": 0,
@@ -431,7 +439,7 @@ Your app supplies tool definitions; the provider never touches your app's privat
 **Turn 2 — Return tool output to provider (`role: "tool"`):**
 ```json
 {
-  "model": "gemma-3",
+  "model": "gemma-4",
   "messages": [
     { "role": "user", "content": "Summarize the currently open note." },
     { "role": "assistant", "content": "<tool_call>{\"name\":\"read_selected_note\",\"arguments\":{\"include_metadata\":true}}</tool_call>" },
@@ -738,7 +746,7 @@ val client = OkHttpClient.Builder()
 
 val payload = """
     {
-      "model": "gemma-3",
+      "model": "gemma-4",
       "messages": [
         {"role": "system", "content": "Answer concisely."},
         {"role": "user", "content": "List 3 benefits of on-device AI."}

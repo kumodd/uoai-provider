@@ -33,7 +33,7 @@ class FileModelRepository(private val dir: File) : ModelRepository {
     override fun listLocalModels(): List<ModelInfo> {
         val files = dir.listFiles()?.filter {
             it.isFile &&
-                (it.extension.equals("task", ignoreCase = true) || it.extension.equals("litertlm", ignoreCase = true)) &&
+                it.extension.equals("litertlm", ignoreCase = true) &&
                 ModelIntegrity.looksLikeModel(it)
         }.orEmpty().sortedBy { it.name.lowercase() }
         return files.map { buildInfo(it) }
@@ -60,12 +60,11 @@ class FileModelRepository(private val dir: File) : ModelRepository {
             val name = file.name
             val quant = Regex("(int4|int8|q4|q8|f32|e2b|e4b|12b|26b|31b)", RegexOption.IGNORE_CASE)
                 .find(name)?.value
-                ?: if (ext.equals("litertlm", ignoreCase = true)) "QAT-INT4" else null
-            val version = if (ext.equals("litertlm", ignoreCase = true)) "LiteRT-LM" else "MediaPipe"
+                ?: "QAT-INT4"
             return ModelInfo(
                 id = ModelCatalog.inferModelId(name),
                 name = name.removeSuffix(".$ext"),
-                version = version,
+                version = "LiteRT-LM",
                 format = ext,
                 quantization = quant,
                 fileSizeBytes = file.length(),

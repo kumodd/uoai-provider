@@ -57,7 +57,7 @@ class ProviderService : Service() {
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(com.uoai.provider.R.drawable.ic_stat_uoai)
             .setContentTitle("UOAI Provider")
-            .setContentText("API listening on 127.0.0.1:8765")
+            .setContentText("API listening on 127.0.0.1:8765 · LLM & Speech")
             .setContentIntent(open).setOngoing(true)
             .addAction(0, "Stop", stop).build()
     }

@@ -16,6 +16,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.*
+import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.FileInputStream
 import java.io.IOException
 
 /**
@@ -205,6 +208,214 @@ class UniversalAIClient(context: Context, val config: ClientConfig = ClientConfi
     suspend fun cancel(requestId: String): Boolean = withContext(Dispatchers.IO) {
         val text = api.call("POST", "/cancel", body = buildJsonObject { put("request_id", requestId) }.toString()).first
         api.json.parseToJsonElement(text).jsonObject["cancelled"]?.jsonPrimitive?.boolean == true
+    }
+
+    // ---- Shared Local & External Audio Transcription APIs ----
+
+    suspend fun audioModels(): List<AudioModelInfo> = withContext(Dispatchers.IO) {
+        val data = api.json.parseToJsonElement(api.call("GET", "/audio/models").first).jsonObject["data"] ?: JsonArray(emptyList())
+        api.json.decodeFromJsonElement(ListSerializer(AudioModelInfo.serializer()), data)
+    }
+
+    suspend fun audioProviders(): List<AudioProviderInfo> = withContext(Dispatchers.IO) {
+        val data = api.json.parseToJsonElement(api.call("GET", "/audio/providers").first).jsonObject["data"] ?: JsonArray(emptyList())
+        api.json.decodeFromJsonElement(ListSerializer(AudioProviderInfo.serializer()), data)
+    }
+
+    suspend fun registerExternalAudioProvider(registration: ExternalAudioProviderRegistration): AudioProviderInfo =
+        withContext(Dispatchers.IO) {
+            val payload = api.json.encodeToString(ExternalAudioProviderRegistration.serializer(), registration)
+            val text = api.call("POST", "/audio/providers", body = payload).first
+            api.json.decodeFromString(AudioProviderInfo.serializer(), text)
+        }
+
+    suspend fun removeExternalAudioProvider(providerId: String): Boolean = withContext(Dispatchers.IO) {
+        val text = api.call("DELETE", "/audio/providers/${providerId.trim()}").first
+        api.json.parseToJsonElement(text).jsonObject["deleted"]?.jsonPrimitive?.boolean == true
+    }
+
+    suspend fun audioStatus(): AudioStatus = withContext(Dispatchers.IO) {
+        api.json.decodeFromString(AudioStatus.serializer(), api.call("GET", "/audio/status").first)
+    }
+
+    suspend fun transcribe(
+        audioFile: File,
+        model: String = "auto",
+        language: String? = null,
+        prompt: String? = null,
+        translate: Boolean = false,
+        temperature: Float = 0.0f,
+        timestamps: Boolean = true,
+        contentType: String = inferAudioMimeType(audioFile.name),
+        provider: String? = null,
+        script: String? = null,
+    ): TranscriptionResult = withContext(Dispatchers.IO) {
+        val fields = buildAsrFormFields(model, provider, language, prompt, script, translate, temperature, timestamps)
+        val (text, _) = api.callMultipart(
+            path = "/audio/transcriptions",
+            fileName = audioFile.name,
+            fileContentType = contentType,
+            audioStream = FileInputStream(audioFile),
+            fields = fields,
+        )
+        api.json.decodeFromString(TranscriptionResult.serializer(), text)
+    }
+
+    suspend fun transcribe(
+        audioBytes: ByteArray,
+        fileName: String = "audio.wav",
+        contentType: String = inferAudioMimeType(fileName),
+        model: String = "auto",
+        language: String? = null,
+        prompt: String? = null,
+        translate: Boolean = false,
+        temperature: Float = 0.0f,
+        timestamps: Boolean = true,
+        provider: String? = null,
+        script: String? = null,
+    ): TranscriptionResult = withContext(Dispatchers.IO) {
+        val fields = buildAsrFormFields(model, provider, language, prompt, script, translate, temperature, timestamps)
+        val (text, _) = api.callMultipart(
+            path = "/audio/transcriptions",
+            fileName = fileName,
+            fileContentType = contentType,
+            audioStream = ByteArrayInputStream(audioBytes),
+            fields = fields,
+        )
+        api.json.decodeFromString(TranscriptionResult.serializer(), text)
+    }
+
+    fun transcribeStream(
+        audioFile: File,
+        model: String = "auto",
+        language: String? = null,
+        prompt: String? = null,
+        translate: Boolean = false,
+        temperature: Float = 0.0f,
+        contentType: String = inferAudioMimeType(audioFile.name),
+        provider: String? = null,
+        script: String? = null,
+    ): Flow<TranscriptionStreamEvent> = callbackFlow {
+        var conn: java.net.HttpURLConnection? = null
+        var requestId: String? = null
+        var done = false
+        launch(Dispatchers.IO) {
+            try {
+                val fields = buildAsrFormFields(model, provider, language, prompt, script, translate, temperature, timestamps = true)
+                val c = api.openMultipart(
+                    path = "/audio/stream",
+                    fileName = audioFile.name,
+                    fileContentType = contentType,
+                    audioStream = FileInputStream(audioFile),
+                    fields = fields,
+                    accept = "text/event-stream",
+                )
+                conn = c
+                val code = c.responseCode
+                requestId = c.getHeaderField("X-Request-Id")
+                if (code !in 200..299) throw api.mapError(code, c.errorStream?.bufferedReader()?.use { it.readText() } ?: "")
+                c.inputStream.bufferedReader().useLines { lines ->
+                    for (line in lines) {
+                        if (!line.startsWith("data:")) continue
+                        val data = line.removePrefix("data:").trim()
+                        if (data == "[DONE]") { done = true; break }
+                        val obj = api.json.parseToJsonElement(data).jsonObject
+                        obj["error"]?.let { e -> throw api.mapError(500, """{"error":$e}""") }
+                        val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: requestId.orEmpty()
+                        when (obj["object"]?.jsonPrimitive?.contentOrNull) {
+                            "audio.transcription.start" -> trySend(
+                                TranscriptionStreamEvent.Started(
+                                    requestId = id,
+                                    model = obj["model"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                                    language = obj["language"]?.jsonPrimitive?.contentOrNull ?: "auto",
+                                ),
+                            )
+                            "audio.transcription.segment" -> trySend(
+                                TranscriptionStreamEvent.Segment(
+                                    requestId = id,
+                                    segment = TranscriptionSegment(
+                                        id = obj["index"]?.jsonPrimitive?.intOrNull ?: 0,
+                                        start = obj["start"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
+                                        end = obj["end"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
+                                        text = obj["text"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                                    ),
+                                    language = obj["language"]?.jsonPrimitive?.contentOrNull ?: "auto",
+                                ),
+                            )
+                            "audio.transcription.done" -> {
+                                if (obj["finish_reason"]?.jsonPrimitive?.contentOrNull == "cancelled") {
+                                    throw RequestCancelledException("ASR request was cancelled")
+                                }
+                                trySend(
+                                    TranscriptionStreamEvent.Completed(
+                                        requestId = id,
+                                        model = obj["model"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                                        language = obj["language"]?.jsonPrimitive?.contentOrNull ?: "auto",
+                                        text = obj["text"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                                        duration = obj["duration"]?.jsonPrimitive?.doubleOrNull,
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                }
+                if (!done) throw ProviderNotRunningException("ASR stream ended unexpectedly")
+                close()
+            } catch (e: UniversalAIException) { close(e) }
+            catch (e: IOException) { if (isActive) close(ProviderNotRunningException("Connection lost: ${e.message}", e)) }
+            catch (e: Exception) { close(e) }
+        }
+        awaitClose {
+            conn?.disconnect()
+            val id = requestId
+            if (!done && id != null) CoroutineScope(Dispatchers.IO).launch { runCatching { this@UniversalAIClient.cancel(id) } }
+        }
+    }
+
+    suspend fun loadAudioModel(model: String? = null): AudioModelLoadResult = withContext(Dispatchers.IO) {
+        val payload = buildJsonObject { model?.let { put("model", it) } }.toString()
+        val text = api.call("POST", "/audio/models/load", body = payload).first
+        api.json.decodeFromString(AudioModelLoadResult.serializer(), text)
+    }
+
+    suspend fun unloadAudioModel(force: Boolean = false): AudioModelUnloadResult = withContext(Dispatchers.IO) {
+        val payload = buildJsonObject { put("force", force) }.toString()
+        val text = api.call("POST", "/audio/models/unload", body = payload).first
+        api.json.decodeFromString(AudioModelUnloadResult.serializer(), text)
+    }
+
+    private fun buildAsrFormFields(
+        model: String,
+        provider: String?,
+        language: String?,
+        prompt: String?,
+        script: String?,
+        translate: Boolean,
+        temperature: Float,
+        timestamps: Boolean,
+    ): Map<String, String> = buildMap {
+        put("model", model)
+        provider?.takeIf { it.isNotBlank() }?.let { put("provider", it) }
+        language?.takeIf { it.isNotBlank() }?.let { put("language", it) }
+        prompt?.takeIf { it.isNotBlank() }?.let { put("prompt", it) }
+        script?.takeIf { it.isNotBlank() }?.let { put("script", it) }
+        put("response_format", if (timestamps) "verbose_json" else "json")
+        put("temperature", temperature.toString())
+        if (translate) put("translate", "true")
+        if (timestamps) put("timestamps", "true")
+    }
+
+    private fun inferAudioMimeType(fileName: String): String = when (fileName.substringAfterLast('.', "").lowercase()) {
+        "wav" -> "audio/wav"
+        "pcm", "raw" -> "audio/pcm"
+        "mp3" -> "audio/mpeg"
+        "m4a", "mp4" -> "audio/mp4"
+        "aac" -> "audio/aac"
+        "ogg", "opus" -> "audio/ogg"
+        "flac" -> "audio/flac"
+        "webm" -> "audio/webm"
+        "amr" -> "audio/amr"
+        else -> "application/octet-stream"
     }
 
     private fun body(

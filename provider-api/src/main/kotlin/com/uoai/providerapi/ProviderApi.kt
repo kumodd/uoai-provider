@@ -1,5 +1,21 @@
 package com.uoai.providerapi
 
+import com.uoai.asr.AsrEngine
+import com.uoai.asr.AsrInsufficientMemoryException
+import com.uoai.asr.AsrModelManager
+import com.uoai.asr.AsrModelMismatchException
+import com.uoai.asr.AsrModelNotReadyException
+import com.uoai.asr.AsrQueueFullException
+import com.uoai.asr.AsrRequestCancelledException
+import com.uoai.asr.AsrSettings
+import com.uoai.asr.AsrThermalThrottledException
+import com.uoai.asr.audio.AudioDecoder
+import com.uoai.asr.audio.AudioTooLongException
+import com.uoai.asr.audio.CorruptAudioException
+import com.uoai.asr.audio.DefaultAudioDecoder
+import com.uoai.asr.audio.UnsupportedAudioFormatException
+import com.uoai.asr.engines.HinglishModelManager
+import com.uoai.asr.engines.SpeechEngineRegistry
 import com.uoai.clients.AuthenticatedClient
 import com.uoai.clients.ClientRegistry
 import com.uoai.inference.ChatMessage
@@ -14,6 +30,10 @@ import com.uoai.inference.runtime.GenerationParams
 import com.uoai.plugins.PluginRegistry
 import com.uoai.plugins.models.ToolCallRequest
 import com.uoai.providerapi.dto.*
+import com.uoai.providerapi.external.ExternalAudioProviderClient
+import com.uoai.providerapi.external.ExternalAudioProviderRegistry
+import com.uoai.providerapi.external.Gemma4AudioTranscriber
+import com.uoai.providerapi.external.HttpExternalAudioProviderClient
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -30,25 +50,39 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.io.readByteArray
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 val ApiJson = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = true }
 
 data class ApiConfig(
-    val publicModelId: String = "gemma-3",
+    val publicModelId: String = "gemma-4",
     val maxRequestBytes: Int = 2 * 1024 * 1024,
     val maxTokensLimit: Int = InferenceSettings.MAX_TOKENS_32K,
     val requestTimeoutMs: Long = 300_000,
+    val maxAudioUploadBytes: Long = 25L * 1024 * 1024,
+    val maxAudioDurationSec: Int = 600,
+    val asrRequestTimeoutMs: Long = 180_000,
 )
 
-/** Installs the whole provider API. Talks only to [InferenceEngine], [ClientRegistry], and optional [PluginRegistry]. */
+/** Installs the whole provider API. Talks only to [InferenceEngine], [AsrEngine], [ClientRegistry], and optional registries. */
 fun Application.providerApi(
     engine: InferenceEngine,
     registry: ClientRegistry,
     config: ApiConfig = ApiConfig(),
     plugins: PluginRegistry? = null,
     settingsProvider: () -> InferenceSettings = { InferenceSettings() },
+    asrEngine: AsrEngine? = null,
+    asrModelManager: AsrModelManager? = null,
+    asrSettingsProvider: () -> AsrSettings = { AsrSettings() },
+    audioDecoder: AudioDecoder = DefaultAudioDecoder(),
+    asrTempStore: AsrTempFileStore? = null,
+    asrAuditLogger: AsrAuditLogger? = null,
+    speechEngineRegistry: SpeechEngineRegistry? = null,
+    hinglishModelManager: HinglishModelManager? = null,
+    externalProviderRegistry: ExternalAudioProviderRegistry = ExternalAudioProviderRegistry(),
+    externalProviderClient: ExternalAudioProviderClient = HttpExternalAudioProviderClient(),
 ) {
     install(ContentNegotiation) { json(ApiJson) }
     install(StatusPages) {
@@ -56,11 +90,38 @@ fun Application.providerApi(
         exception<ModelNotReadyException> { call, e ->
             call.respondError(HttpStatusCode.ServiceUnavailable, "model_unavailable", "model_not_ready", e.message ?: "Model not ready")
         }
+        exception<AsrModelNotReadyException> { call, e ->
+            call.respondError(HttpStatusCode.ServiceUnavailable, "model_unavailable", "asr_model_not_ready", e.message ?: "ASR model not ready")
+        }
+        exception<AsrInsufficientMemoryException> { call, e ->
+            call.respondError(HttpStatusCode.ServiceUnavailable, "model_unavailable", "insufficient_memory", e.message ?: "Insufficient memory")
+        }
+        exception<AsrThermalThrottledException> { call, e ->
+            call.respondError(HttpStatusCode.ServiceUnavailable, "model_unavailable", "thermal_throttled", e.message ?: "Device thermally throttled")
+        }
+        exception<AsrModelMismatchException> { call, e ->
+            call.respondError(HttpStatusCode.Conflict, "conflict_error", "model_mismatch", e.message ?: "Requested ASR model is not active")
+        }
         exception<QueueFullException> { call, e ->
             call.respondError(HttpStatusCode.TooManyRequests, "rate_limit_error", "queue_full", e.message ?: "Queue full")
         }
+        exception<AsrQueueFullException> { call, e ->
+            call.respondError(HttpStatusCode.TooManyRequests, "rate_limit_error", "queue_full", e.message ?: "ASR queue full")
+        }
         exception<RequestCancelledException> { call, e ->
             call.respondError(HttpStatusCode.Conflict, "request_cancelled", "request_cancelled", e.message ?: "Cancelled")
+        }
+        exception<AsrRequestCancelledException> { call, e ->
+            call.respondError(HttpStatusCode.Conflict, "request_cancelled", "request_cancelled", e.message ?: "ASR request cancelled")
+        }
+        exception<UnsupportedAudioFormatException> { call, e ->
+            call.respondError(HttpStatusCode.BadRequest, "invalid_request_error", "unsupported_audio_format", e.message ?: "Unsupported audio format")
+        }
+        exception<CorruptAudioException> { call, e ->
+            call.respondError(HttpStatusCode.BadRequest, "invalid_request_error", "corrupt_audio", e.message ?: "Corrupt audio")
+        }
+        exception<AudioTooLongException> { call, e ->
+            call.respondError(HttpStatusCode.BadRequest, "invalid_request_error", "audio_too_long", e.message ?: "Audio exceeds maximum duration")
         }
         exception<IllegalArgumentException> { call, e ->
             call.respondError(HttpStatusCode.BadRequest, "invalid_request_error", "invalid_request", e.message ?: "Invalid request")
@@ -76,6 +137,7 @@ fun Application.providerApi(
 
     // request id -> owning client, so one client cannot cancel another's request
     val owners = ConcurrentHashMap<String, String>()
+    val effectiveTempStore = asrTempStore ?: AsrTempFileStore(File(System.getProperty("java.io.tmpdir"), "uoai_asr_uploads"))
 
     routing {
         route("/v1") {
@@ -105,13 +167,53 @@ fun Application.providerApi(
                 call.respond(ModelsResponse(data = models))
             }
             get("/capabilities") {
-                call.authenticate(registry)
+                call.authenticateClient(registry)
                 val providerTools = plugins?.enabledTools()?.map { it.toolName }.orEmpty()
                 val settings = settingsProvider()
                 val activeCtx = engine.modelStatus.value.loadedConfig?.contextWindowTokens ?: settings.contextWindowTokens
+                val asrMgr = asrModelManager
+                val asrEnabled = asrEngine != null && asrMgr != null
+                val gemma4AudioReady = Gemma4AudioTranscriber.isReady(engine)
+                val features = buildList {
+                    add("chat")
+                    add("streaming")
+                    add("cancellation")
+                    add("tool-calling")
+                    if (asrEnabled) {
+                        add("asr")
+                        add("audio-streaming")
+                        add("external-inference")
+                    }
+                    if (gemma4AudioReady) {
+                        add("gemma4-audio")
+                    }
+                }
+                val asrCap = if (asrEnabled) {
+                    val s = asrMgr.status.value
+                    val providerIds = buildList {
+                        add("gemma4")
+                        add("whisper")
+                        if (hinglishModelManager != null) add("cactus")
+                        externalProviderRegistry.list().filter { it.enabled }.forEach { add(it.id) }
+                    }
+                    AsrCapabilitiesDto(
+                        enabled = true,
+                        activeModelId = s.activePreset.id,
+                        activeProfile = s.selectedProfile.apiId,
+                        ready = s.isLoaded || gemma4AudioReady,
+                        maxUploadBytes = config.maxAudioUploadBytes,
+                        maxAudioDurationSec = config.maxAudioDurationSec,
+                        gemma4AudioReady = gemma4AudioReady,
+                        preferredProvider = if (gemma4AudioReady) "gemma4" else "whisper",
+                        externalInferenceEnabled = true,
+                        providers = providerIds,
+                    )
+                } else {
+                    null
+                }
                 call.respond(
                     CapabilitiesResponse(
-                        features = listOf("chat", "streaming", "cancellation", "tool-calling"),
+                        features = features,
                         maxRequestBytes = config.maxRequestBytes,
                         maxTokensLimit = config.maxTokensLimit,
                         concurrentGenerations = 1,
@@ -119,6 +221,7 @@ fun Application.providerApi(
                         providerTools = providerTools,
                         contextWindowTokens = activeCtx,
                         defaultMaxTokens = settings.maxOutputTokens,
+                        asr = asrCap,
                     ),
                 )
             }
@@ -203,30 +306,71 @@ fun Application.providerApi(
                 } finally { owners.remove(id) }
             }
             post("/cancel") {
-                val clientId = call.authenticate(registry).id
+                val clientId = call.authenticateClient(registry).id
                 val req = call.readJson<CancelRequest>(config.maxRequestBytes)
                 val rid = req.requestId?.takeIf { it.isNotBlank() }
                     ?: throw ApiException(HttpStatusCode.BadRequest, "invalid_request_error", "missing_request_id", "request_id is required")
-                val cancelled = owners[rid] == clientId && engine.cancel(rid)
+                val cancelled = owners[rid] == clientId && if (rid.startsWith("asr-") && asrEngine != null) {
+                    asrEngine.cancel(rid) || engine.cancel(rid)
+                } else {
+                    engine.cancel(rid)
+                }
                 call.respond(CancelResponse(rid, cancelled))
+            }
+            if (asrEngine != null && asrModelManager != null) {
+                asrRoutes(
+                    asrEngine = asrEngine,
+                    asrModelManager = asrModelManager,
+                    inferenceEngine = engine,
+                    inferenceSettingsProvider = settingsProvider,
+                    registry = registry,
+                    config = config,
+                    owners = owners,
+                    audioDecoder = audioDecoder,
+                    tempStore = effectiveTempStore,
+                    asrSettingsProvider = asrSettingsProvider,
+                    auditLogger = asrAuditLogger,
+                    speechEngineRegistry = speechEngineRegistry,
+                    hinglishModelManager = hinglishModelManager,
+                    externalProviderRegistry = externalProviderRegistry,
+                    externalProviderClient = externalProviderClient,
+                )
             }
         }
     }
 }
 
-private fun denied(what: String) =
+internal fun permissionDenied(what: String) =
     ApiException(HttpStatusCode.Forbidden, "permission_error", "permission_denied", "This client is not permitted to use $what")
+
+private fun denied(what: String) = permissionDenied(what)
 
 private suspend fun ApplicationCall.respondError(status: HttpStatusCode, type: String, code: String, message: String) {
     respond(status, ErrorResponse(ErrorBody(message, type, code)))
 }
 
-private suspend fun ApplicationCall.authenticate(registry: ClientRegistry): AuthenticatedClient {
+internal suspend fun ApplicationCall.authenticateClient(registry: ClientRegistry): AuthenticatedClient {
     val header = request.headers[HttpHeaders.Authorization]
     val token = header?.takeIf { it.startsWith("Bearer ", ignoreCase = true) }?.substring(7)?.trim()
     if (token.isNullOrEmpty()) throw ApiException(HttpStatusCode.Unauthorized, "authentication_error", "missing_token", "Bearer token required")
     return registry.authenticate(token)
         ?: throw ApiException(HttpStatusCode.Unauthorized, "authentication_error", "invalid_token", "Invalid or revoked token")
+}
+
+private suspend fun ApplicationCall.authenticate(registry: ClientRegistry): AuthenticatedClient = authenticateClient(registry)
+
+internal suspend inline fun <reified T> ApplicationCall.readOptionalJson(maxBytes: Int): T? {
+    val declared = request.contentLength()
+    if (declared != null && declared > maxBytes)
+        throw ApiException(HttpStatusCode.PayloadTooLarge, "invalid_request_error", "request_too_large", "Body exceeds $maxBytes bytes")
+    val packet = receiveChannel().readRemaining(maxBytes.toLong() + 1)
+    val bytes = packet.readByteArray()
+    if (bytes.size > maxBytes)
+        throw ApiException(HttpStatusCode.PayloadTooLarge, "invalid_request_error", "request_too_large", "Body exceeds $maxBytes bytes")
+    val text = bytes.decodeToString().trim()
+    if (text.isEmpty()) return null
+    return try { ApiJson.decodeFromString<T>(text) }
+    catch (e: Exception) { throw ApiException(HttpStatusCode.BadRequest, "invalid_request_error", "invalid_json", "Malformed JSON: ${e.message?.lineSequence()?.first()}") }
 }
 
 private suspend inline fun <reified T> ApplicationCall.readJson(maxBytes: Int): T {
@@ -247,11 +391,10 @@ private fun isAcceptedModelName(
     activeModel: com.uoai.inference.ModelInfo?,
 ): Boolean {
     if (requested == null || requested == "auto" || requested == "default") return true
-    if (requested == config.publicModelId) return activeModel == null || activeModel.id.startsWith("gemma-3")
+    if (requested == config.publicModelId) return activeModel == null || activeModel.id.startsWith("gemma-4")
     if (activeModel == null) return false
     if (requested == activeModel.id || requested == activeModel.name) return true
     if (requested == "gemma-4" && activeModel.id.startsWith("gemma-4")) return true
-    if (requested == "gemma-3" && activeModel.id.startsWith("gemma-3")) return true
     return false
 }
 

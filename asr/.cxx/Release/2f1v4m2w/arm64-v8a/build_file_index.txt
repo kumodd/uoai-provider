@@ -1,0 +1,11 @@
+/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/CMakeLists.txt
+/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/CMakeLists.txt
+/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/cmake/build-info.cmake
+/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/cmake/parakeet-config.cmake.in
+/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/cmake/whisper-config.cmake.in
+/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/ggml/CMakeLists.txt
+/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/ggml/cmake/common.cmake
+/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/ggml/cmake/ggml-config.cmake.in
+/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/ggml/src/CMakeLists.txt
+/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/ggml/src/ggml-cpu/CMakeLists.txt
+/Users/kumodyadav/Desktop/UOAIP/asr/src/main/cpp/whisper.cpp/src/CMakeLists.txt

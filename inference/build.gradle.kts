@@ -22,7 +22,5 @@ dependencies {
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
     implementation(project(":core"))
-    implementation(libs.mediapipe.genai)
     implementation(libs.litertlm.android)
-    implementation("com.google.guava:guava:33.4.0-android")
 }

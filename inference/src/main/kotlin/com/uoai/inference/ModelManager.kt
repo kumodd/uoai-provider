@@ -43,6 +43,7 @@ class ModelManager(
                 loadProgress = progress,
                 model = repository.installed() ?: it.model,
                 loadedConfig = runtime.loadedConfig,
+                supportsAudioInput = runtime.supportsAudioInput,
             )
         }
 
