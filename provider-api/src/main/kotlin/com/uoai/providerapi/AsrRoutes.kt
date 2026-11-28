@@ -178,19 +178,19 @@ internal fun Route.asrRoutes(
                 // 3. Local Hinglish Cactus engines (AksharSTT v4, AksharSTT Lite v4, Shruti)
                 val hSt = hinglishModelManager?.status?.value
                 if (hSt != null) {
-                    HinglishModelCatalog.ALL_SPECS.forEach { spec ->
+                    HinglishModelCatalog.ALL_CACTUS_MODELS.forEach { spec ->
                         val installed = hSt.isInstalled(spec.kind)
-                        val loaded = hSt.activeLoadedKind == spec.kind
+                        val loaded = hSt.loadedKind == spec.kind
                         add(
                             AudioModelDto(
-                                id = spec.kind.apiId,
-                                profile = spec.kind.apiId,
+                                id = spec.kind.id,
+                                profile = spec.kind.id,
                                 name = spec.kind.displayName,
                                 fileName = spec.fileName,
                                 format = "cact",
-                                quantization = spec.quantization,
+                                quantization = "4-bit",
                                 multilingual = false,
-                                sizeBytes = hSt.installedSizes[spec.kind] ?: spec.exactSizeBytes,
+                                sizeBytes = hSt.installed[spec.kind]?.fileSizeBytes ?: spec.exactSizeBytes,
                                 approxRamMb = spec.approxRamMb,
                                 installed = installed,
                                 selected = loaded,
@@ -281,9 +281,9 @@ internal fun Route.asrRoutes(
                     ),
                 )
                 if (hinglishSt != null) {
-                    val installedHinglish = HinglishModelCatalog.ALL_SPECS
+                    val installedHinglish = HinglishModelCatalog.ALL_CACTUS_MODELS
                         .filter { hinglishSt.isInstalled(it.kind) }
-                        .map { it.kind.apiId }
+                        .map { it.kind.id }
                     add(
                         AudioProviderDto(
                             id = "cactus",
@@ -293,8 +293,8 @@ internal fun Route.asrRoutes(
                             enabled = true,
                             ready = installedHinglish.isNotEmpty(),
                             recommended = false,
-                            defaultModel = installedHinglish.firstOrNull() ?: AsrEngineKind.AKSHAR_V4.apiId,
-                            models = HinglishModelCatalog.ALL_SPECS.map { it.kind.apiId },
+                            defaultModel = installedHinglish.firstOrNull() ?: AsrEngineKind.AKSHAR_V4.id,
+                            models = HinglishModelCatalog.ALL_CACTUS_MODELS.map { it.kind.id },
                             supportsStreaming = true,
                             note = "Specialized lightweight 4-bit Hindi/Hinglish on-device models.",
                         ),
@@ -516,7 +516,7 @@ internal fun Route.asrRoutes(
                             "Hinglish ASR registry is not configured on this server",
                         )
                         val engine = reg.get(target.kind)
-                        if (!engine.isAvailable()) {
+                        if (!engine.isModelInstalled()) {
                             throw AsrModelNotReadyException(
                                 "${target.kind.displayName} is not installed. Download it in UOAI Provider -> Models -> Speech.",
                             )
@@ -525,7 +525,7 @@ internal fun Route.asrRoutes(
                         val res = withTimeout(config.asrRequestTimeoutMs) {
                             engine.initialize()
                             engine.transcribeFloat(
-                                audio16kMono = decoded.samples,
+                                pcm16kMono = decoded.samples,
                                 language = parsed.language ?: asrSettingsProvider().defaultLanguage,
                             )
                         }
@@ -533,7 +533,7 @@ internal fun Route.asrRoutes(
                         respondTranscription(
                             id = id,
                             rawText = res.text,
-                            modelId = target.kind.apiId,
+                            modelId = target.kind.id,
                             providerId = "cactus",
                             language = res.language ?: parsed.language ?: "hi",
                             durationSec = decoded.durationSec,
@@ -685,13 +685,13 @@ internal fun Route.asrRoutes(
                             "Hinglish ASR registry is not configured on this server",
                         )
                         val engine = reg.get(target.kind)
-                        if (!engine.isAvailable()) {
+                        if (!engine.isModelInstalled()) {
                             throw AsrModelNotReadyException("${target.kind.displayName} is not installed")
                         }
                         streamSingleShotAsrResponse(
                             requestId = id,
                             providerId = "cactus",
-                            modelId = target.kind.apiId,
+                            modelId = target.kind.id,
                             initialLanguage = parsed.language ?: "hi",
                             durationSec = decoded.durationSec,
                             script = parsed.script,
@@ -764,14 +764,15 @@ internal fun Route.asrRoutes(
                         "Hinglish ASR model '${cactusKind.displayName}' is not downloaded. Download it in UOAI Provider first.",
                     )
                 }
-                val loadMs = hMgr.load(cactusKind)
-                auditLogger?.invoke(client.id, "asr.model.load", cactusKind.apiId, "OK", "load_time_ms=$loadMs")
+                val loadMs = hMgr.ensureLoaded(cactusKind)
+                auditLogger?.invoke(client.id, "asr.model.load", cactusKind.id, "OK", "load_time_ms=$loadMs")
+                val loadedNow = hMgr.status.value.loadedKind == cactusKind
                 call.respond(
                     AudioModelLoadResponse(
-                        loaded = hMgr.status.value.activeLoadedKind == cactusKind,
-                        modelId = cactusKind.apiId,
-                        profile = cactusKind.apiId,
-                        state = hMgr.status.value.state.name,
+                        loaded = loadedNow,
+                        modelId = cactusKind.id,
+                        profile = cactusKind.id,
+                        state = if (loadedNow) "READY" else "INSTALLED",
                         loadTimeMs = loadMs,
                     ),
                 )
@@ -836,7 +837,7 @@ internal fun Route.asrRoutes(
                 q.runningRequestId?.let { asrEngine.cancel(it) }
             }
             asrModelManager.unload()
-            hinglishModelManager?.unload()
+            hinglishModelManager?.release()
             auditLogger?.invoke(client.id, "asr.model.unload", asrModelManager.status.value.activePreset.id, "OK", "force=${req.force}")
             call.respond(
                 AudioModelUnloadResponse(
@@ -885,8 +886,8 @@ private fun resolveAudioTarget(
             "cactus", "hinglish", "local-hinglish", "akshar", "shruti" -> {
                 val kind = resolveExplicitCactusKindOrNull(lowerModel)
                     ?: resolveExplicitCactusKindOrNull(normProvider)
-                    ?: hinglishModelManager?.status?.value?.activeLoadedKind
-                    ?: HinglishModelCatalog.ALL_SPECS.firstOrNull { hinglishModelManager?.status?.value?.isInstalled(it.kind) == true }?.kind
+                    ?: hinglishModelManager?.status?.value?.loadedKind
+                    ?: HinglishModelCatalog.ALL_CACTUS_MODELS.firstOrNull { hinglishModelManager?.status?.value?.isInstalled(it.kind) == true }?.kind
                     ?: AsrEngineKind.AKSHAR_V4
                 ResolvedAudioTarget.LocalCactus(kind)
             }

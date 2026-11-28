@@ -14,7 +14,7 @@ import com.uoai.asr.engines.HinglishModelManager
 import com.uoai.asr.engines.ShrutiEngine
 import com.uoai.asr.engines.SpeechEngineRegistry
 import com.uoai.asr.runtime.CactusSpeechBackend
-import com.uoai.asr.runtime.CactusTranscriptionResult
+import com.uoai.asr.runtime.CactusTranscribeOutput
 import com.uoai.asr.runtime.MockAsrRuntime
 import com.uoai.clients.AuthenticatedClient
 import com.uoai.clients.ClientPermissions
@@ -31,12 +31,17 @@ import com.uoai.providerapi.external.ExternalAudioResult
 import com.uoai.providerapi.external.ExternalAudioSegment
 import com.uoai.providerapi.external.ExternalProviderType
 import com.uoai.providerapi.external.HttpExternalAudioProviderClient
-import com.sun.net.httpserver.HttpServer
 import io.ktor.client.request.*
 import io.ktor.client.request.forms.MultiPartFormDataContent
 import io.ktor.client.request.forms.formData
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.request.receiveText
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.post
+import io.ktor.server.routing.routing
 import io.ktor.server.testing.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -51,7 +56,6 @@ import org.junit.rules.TemporaryFolder
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.RandomAccessFile
-import java.net.InetSocketAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.PI
@@ -74,19 +78,23 @@ class ExternalAudioInferenceTest {
     }
 
     private class FakeCactusBackend : CactusSpeechBackend {
-        override var isLoaded: Boolean = false
         override var loadedModelPath: String? = null
-        override suspend fun load(modelPath: String) { isLoaded = true; loadedModelPath = modelPath }
-        override suspend fun unload() { isLoaded = false; loadedModelPath = null }
-        override suspend fun transcribe(pcm16kMono: FloatArray, language: String) = CactusTranscriptionResult(
+        override val isSpeechLoaded: Boolean get() = loadedModelPath != null
+        override suspend fun loadModel(modelPath: String): Long {
+            loadedModelPath = modelPath
+            return 12L
+        }
+        override suspend fun reset() { loadedModelPath = null }
+        override suspend fun transcribe(pcm16kMono: FloatArray, language: String?, keywords: String?) = CactusTranscribeOutput(
             text = "भाई कल meeting है, तुम presentation भेज देना।",
-            totalTimeMs = 45.0,
+            language = language ?: "hi",
             decodeTps = 80.0,
+            elapsedMs = 45L,
         )
     }
 
     private fun fakeGgml(name: String): File {
-        val f = tmp.newFile(name)
+        val f = File(tmp.newFolder(), name)
         val header = ByteBuffer.allocate(48).order(ByteOrder.LITTLE_ENDIAN).apply {
             putInt(GgmlModelValidator.GGML_MAGIC_LE)
             putInt(51865); putInt(1500); putInt(512); putInt(8); putInt(6)
@@ -99,7 +107,7 @@ class ExternalAudioInferenceTest {
     }
 
     private fun fakeCact(name: String): File {
-        val f = tmp.newFile(name)
+        val f = File(tmp.newFolder(), name)
         val header = ByteBuffer.allocate(32).order(ByteOrder.LITTLE_ENDIAN).apply {
             putInt(CactModelValidator.CACT_MAGIC_LE)
             putInt(1); putInt(0); putInt(0)
@@ -151,7 +159,7 @@ class ExternalAudioInferenceTest {
         val asrSettings = FileAsrSettingsRepository(File(tmp.newFolder(), "asr_settings.json"))
         val asrMgr = AsrModelManager(asrRepo, asrRt, asrSettings, scope, verifySha256OnDownload = false)
         val cactusBackend = FakeCactusBackend()
-        val hinglishMgr = HinglishModelManager(tmp.newFolder("hinglish"), cactusBackend, scope, verifySha256OnDownload = false)
+        val hinglishMgr = HinglishModelManager(tmp.newFolder(), cactusBackend, scope, verifySha256OnDownload = false)
         runBlocking {
             llmMgr.importModel("gemma-4-E2B-it-gpu.litertlm", ByteArrayInputStream(ByteArray(11 * 1024 * 1024)))
             llmMgr.load()
@@ -172,8 +180,8 @@ class ExternalAudioInferenceTest {
             aksharLiteV4 = AksharEngine(AsrEngineKind.AKSHAR_LITE_V4, hinglishMgr, cactusBackend),
             shrutiHi = ShrutiEngine(hinglishMgr, cactusBackend),
         )
-        val extRegistry = ExternalAudioProviderRegistry(File(tmp.newFolder("ext"), "providers.json"))
-        return Env(llmEngine, asrMgr, asrEngine, asrSettings, speechReg, hinglishMgr, extRegistry, AsrTempFileStore(tmp.newFolder("tmp")))
+        val extRegistry = ExternalAudioProviderRegistry(File(tmp.newFolder(), "providers.json"))
+        return Env(llmEngine, asrMgr, asrEngine, asrSettings, speechReg, hinglishMgr, extRegistry, AsrTempFileStore(tmp.newFolder()))
     }
 
     private fun testApp(
@@ -383,41 +391,43 @@ class ExternalAudioInferenceTest {
     }
 
     @Test fun httpExternalClientSupportsAllThreeWireProtocols() = runBlocking {
-        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        val port = server.address.port
         var lastAuthHeader: String? = null
         var lastGoogHeader: String? = null
+        var sawInputAudio = false
+        var sawInlineData = false
 
-        server.createContext("/v1/audio/transcriptions") { ex ->
-            lastAuthHeader = ex.requestHeaders.getFirst("Authorization")
-            ex.requestBody.readBytes()
-            val resp = """{"text":"hello from openai whisper","language":"en","duration":1.0,"segments":[{"id":0,"start":0.0,"end":1.0,"text":"hello from openai whisper"}]}"""
-            val bytes = resp.toByteArray()
-            ex.responseHeaders.add("Content-Type", "application/json")
-            ex.sendResponseHeaders(200, bytes.size.toLong())
-            ex.responseBody.use { it.write(bytes) }
+        val server = embeddedServer(CIO, port = 0, host = "127.0.0.1") {
+            routing {
+                post("/v1/audio/transcriptions") {
+                    lastAuthHeader = call.request.headers["Authorization"]
+                    call.receiveText()
+                    call.respondText(
+                        """{"text":"hello from openai whisper","language":"en","duration":1.0,"segments":[{"id":0,"start":0.0,"end":1.0,"text":"hello from openai whisper"}]}""",
+                        ContentType.Application.Json,
+                    )
+                }
+                post("/v1/chat/completions") {
+                    lastAuthHeader = call.request.headers["Authorization"]
+                    val bodyStr = call.receiveText()
+                    sawInputAudio = bodyStr.contains("\"input_audio\"")
+                    call.respondText(
+                        """{"model":"gemma-4-remote","choices":[{"message":{"role":"assistant","content":"Bhai kal meeting hai."}}]}""",
+                        ContentType.Application.Json,
+                    )
+                }
+                post("/v1beta/models/gemini-2.5-flash:generateContent") {
+                    lastGoogHeader = call.request.headers["x-goog-api-key"]
+                    val bodyStr = call.receiveText()
+                    sawInlineData = bodyStr.contains("\"inline_data\"")
+                    call.respondText(
+                        """{"candidates":[{"content":{"parts":[{"text":"Namaste from Gemini"}]}}]}""",
+                        ContentType.Application.Json,
+                    )
+                }
+            }
         }
-        server.createContext("/v1/chat/completions") { ex ->
-            lastAuthHeader = ex.requestHeaders.getFirst("Authorization")
-            val bodyStr = ex.requestBody.readBytes().toString(Charsets.UTF_8)
-            assertTrue("Expected input_audio payload", bodyStr.contains("\"input_audio\""))
-            val resp = """{"model":"gemma-4-remote","choices":[{"message":{"role":"assistant","content":"Bhai kal meeting hai."}}]}"""
-            val bytes = resp.toByteArray()
-            ex.responseHeaders.add("Content-Type", "application/json")
-            ex.sendResponseHeaders(200, bytes.size.toLong())
-            ex.responseBody.use { it.write(bytes) }
-        }
-        server.createContext("/v1beta/models/gemini-2.5-flash:generateContent") { ex ->
-            lastGoogHeader = ex.requestHeaders.getFirst("x-goog-api-key")
-            val bodyStr = ex.requestBody.readBytes().toString(Charsets.UTF_8)
-            assertTrue("Expected inline_data audio payload", bodyStr.contains("\"inline_data\""))
-            val resp = """{"candidates":[{"content":{"parts":[{"text":"Namaste from Gemini"}]}}]}"""
-            val bytes = resp.toByteArray()
-            ex.responseHeaders.add("Content-Type", "application/json")
-            ex.sendResponseHeaders(200, bytes.size.toLong())
-            ex.responseBody.use { it.write(bytes) }
-        }
-        server.start()
+        server.start(wait = false)
+        val port = server.engine.resolvedConnectors().first().port
         try {
             val httpClient = HttpExternalAudioProviderClient()
             val wav = voicedWav(4000)
@@ -450,6 +460,7 @@ class ExternalAudioInferenceTest {
                 apiKey = "key-chat",
                 request = ExternalAudioRequest("r2", wav, durationSec = 0.25, model = "gemma-4-remote", language = "en,hi"),
             )
+            assertTrue("Expected input_audio payload", sawInputAudio)
             assertEquals("Bearer key-chat", lastAuthHeader)
             assertEquals("Bhai kal meeting hai.", res2.text)
 
@@ -465,10 +476,11 @@ class ExternalAudioInferenceTest {
                 apiKey = "key-goog",
                 request = ExternalAudioRequest("r3", wav, durationSec = 0.25, model = "gemini-2.5-flash", language = "hi"),
             )
+            assertTrue("Expected inline_data audio payload", sawInlineData)
             assertEquals("key-goog", lastGoogHeader)
             assertEquals("Namaste from Gemini", res3.text)
         } finally {
-            server.stop(0)
+            server.stop(200, 1000)
         }
     }
 }

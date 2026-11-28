@@ -1,12 +1,12 @@
 package com.uoai.providerapi.external
 
 import com.uoai.asr.AsrModelCatalog
-import com.uoai.asr.AsrSegment
 import com.uoai.asr.AsrStreamEvent
 import com.uoai.asr.audio.DecodedAudio
 import com.uoai.asr.audio.LiveAudioChunker
 import com.uoai.asr.audio.TranscriptContinuity
 import com.uoai.asr.audio.WavPcmDecoder
+import com.uoai.asr.runtime.AsrSegment
 import com.uoai.inference.ChatMessage
 import com.uoai.inference.InferenceEngine
 import com.uoai.inference.InferenceRequest
@@ -283,10 +283,11 @@ object Gemma4AudioTranscriber {
         // Even if clip is quiet/short, send the single clip to Gemma 4 so short audio clips work cleanly.
         return listOf(
             com.uoai.asr.audio.AudioChunk(
-                sequenceId = 0,
-                samples = decoded.samples,
+                sequenceId = 0L,
+                startSample = 0L,
+                endSample = decoded.samples.size.toLong(),
                 sampleRate = decoded.sampleRate,
-                durationSec = decoded.durationSec,
+                samples = decoded.samples,
             ),
         )
     }
